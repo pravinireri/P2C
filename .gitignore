@@ -1,0 +1,19 @@
+.npmrc
+.snowflake/
+.vercel/
+next.user-config.*
+
+# Environment variables
+.env*.local
+
+# Common ignores
+node_modules/
+.next/
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env
+.env.*
