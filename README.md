@@ -1,6 +1,6 @@
 # P2C
 
-Turns old code (PowerBuilder, COBOL, VB6) into C# (.NET 8).  
+Turns old code like PowerBuilder into C#.  
 Also grades itself and writes tests.
 
 ---
