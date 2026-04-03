@@ -40,21 +40,16 @@ type ActiveTab = 'analysis' | 'translation' | 'evaluation' | 'tests'
 
 const SAMPLES: { label: string; language: string; code: string }[] = [
   {
-    label: 'PB event handler',
+    label: 'PB click handler',
     language: 'powerbuilder',
-    code: `event clicked()
-  int li_count
-  string ls_name
-
-  li_count = dw_employees.RowCount()
-  if li_count = 0 then
-    MessageBox("Warning", "No employees found")
-    return
-  end if
-
-  ls_name = dw_employees.GetItemString(1, "emp_name")
-  MessageBox("First Employee", ls_name)
-end event`,
+    code: `// PB event handler - dw_employees click
+string ls_name
+ls_name = dw_employees.GetItemString(1, "emp_name")
+if IsNull(ls_name) or len(ls_name) = 0 then
+    MessageBox("Error", "No employees found.")
+else
+    MessageBox("First Employee", ls_name)
+end if`,
   },
   {
     label: 'PB query function',
@@ -151,22 +146,23 @@ function normalizeEvaluation(raw: unknown): Evaluation | null {
 
 function riskClass(risk: string) {
   const r = risk.toLowerCase()
-  if (r === 'low') return 'border-emerald-600/25 bg-emerald-50 text-emerald-900'
-  if (r === 'high') return 'border-rose-600/25 bg-rose-50 text-rose-900'
-  return 'border-amber-600/25 bg-amber-50 text-amber-900'
+  if (r === 'low') return 'border-foreground/20 bg-background text-foreground'
+  if (r === 'high') return 'border-foreground bg-foreground text-background'
+  return 'border-foreground/40 bg-muted text-foreground'
 }
 
-function complexityClass(c: string) {
-  const x = c.toLowerCase()
-  if (x === 'low') return 'text-emerald-700'
-  if (x === 'high') return 'text-rose-700'
-  return 'text-amber-800'
+function progressIcon(stageKey: string, isDone: boolean, isActive: boolean): { icon: string; colorClass: string } {
+  if (!isDone) {
+    return {
+      icon: isActive ? '...' : '',
+      colorClass: isActive ? 'border-foreground bg-background text-foreground' : 'border-border text-muted-foreground',
+    }
+  }
+  return { icon: 'Done', colorClass: 'border-foreground bg-foreground text-background' }
 }
 
-function scoreBarClass(score: number) {
-  if (score >= 80) return 'bg-emerald-600'
-  if (score >= 60) return 'bg-amber-600'
-  return 'bg-rose-600'
+function scoreBarClass() {
+  return 'bg-foreground'
 }
 
 async function copyToClipboard(text: string, setCopied: (v: boolean) => void) {
@@ -199,7 +195,7 @@ ${originalCode}
 
 ## Analysis
 
-Complexity: ${analysis?.complexity ?? '—'}
+Complexity: ${analysis?.complexity ?? '--'}
 
 ${analysis?.explanation ?? ''}
 
@@ -220,9 +216,9 @@ ${translation?.notes ?? ''}
 
 | | |
 |---|---|
-| Faithfulness | ${evaluation?.faithfulness_score ?? '—'}/100 |
-| Idiomaticity | ${evaluation?.idiomaticity_score ?? '—'}/100 |
-| Risk | ${evaluation?.risk_level ?? '—'} |
+| Faithfulness | ${evaluation?.faithfulness_score ?? '--'}/100 |
+| Idiomaticity | ${evaluation?.idiomaticity_score ?? '--'}/100 |
+| Risk | ${evaluation?.risk_level ?? '--'} |
 
 **Strengths:**  
 ${(evaluation?.strengths ?? []).map((s) => `- ${s}`).join('\n')}
@@ -248,7 +244,7 @@ function CopyButton({ text }: { text: string }) {
     <button
       type="button"
       onClick={() => copyToClipboard(text, setCopied)}
-      className="rounded border border-border px-2 py-1 text-xs text-muted-foreground transition hover:border-foreground/20 hover:text-foreground"
+      className="rounded border border-border px-2 py-1 text-xs text-muted-foreground transition hover:border-foreground hover:text-foreground"
     >
       {copied ? 'Copied' : 'Copy'}
     </button>
@@ -264,7 +260,7 @@ function ScoreBar({ label, score }: { label: string; score: number }) {
       </div>
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
         <div
-          className={`score-bar-fill h-full rounded-full ${scoreBarClass(score)}`}
+          className={`score-bar-fill h-full rounded-full ${scoreBarClass()}`}
           style={{ '--target-width': `${score}%` } as React.CSSProperties}
         />
       </div>
@@ -439,12 +435,12 @@ export default function HomePage() {
   return (
     <main className="min-h-screen px-4 py-10 md:px-8">
       <div className="mx-auto flex max-w-3xl flex-col gap-10">
-        <header className="animate-fade-in space-y-3">
-          <p className="text-sm text-muted-foreground">Legacy code → C# (.NET 8)</p>
+        <header className="space-y-3">
+          <p className="text-sm text-muted-foreground">Legacy code to C# (.NET 8)</p>
           <h1 className="text-3xl font-semibold tracking-tight text-foreground md:text-4xl">P2C</h1>
           <p className="max-w-xl text-[15px] leading-relaxed text-muted-foreground">
-            Paste what you have. You get a short read on what it does, C# that matches the intent, a
-            blunt quality pass, and starter tests. Nothing fancy — just enough to move forward.
+            Paste PowerBuilder code. Get analysis, idiomatic C# (.NET 8) with
+            INotificationService integration, quality scoring, and xUnit tests.
           </p>
         </header>
 
@@ -478,7 +474,7 @@ export default function HomePage() {
             <label htmlFor="legacy-code-input" className="text-sm font-medium text-foreground">
               Your code
             </label>
-            <div className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+            <div className="overflow-hidden rounded-lg border border-border bg-card">
               <div className="border-b border-border px-3 py-2">
                 <span className="font-mono text-xs text-muted-foreground">{sourceLanguage}</span>
               </div>
@@ -513,16 +509,16 @@ export default function HomePage() {
                 type="submit"
                 disabled={isRunning || !legacyCode.trim()}
                 id="run-pipeline-btn"
-                className="rounded-md bg-foreground px-5 py-2 text-sm font-medium text-background transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-md bg-foreground px-5 py-2 text-sm font-medium text-background transition hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {isRunning ? 'Working…' : 'Run'}
+                {isRunning ? 'Working...' : 'Run'}
               </button>
 
               {hasResult && (
                 <button
                   type="button"
                   onClick={handleDownloadReport}
-                  className="rounded-md border border-border px-4 py-2 text-sm text-muted-foreground transition hover:border-foreground/25 hover:text-foreground"
+                  className="rounded-md border border-border px-4 py-2 text-sm text-muted-foreground transition hover:border-foreground hover:text-foreground"
                 >
                   Download notes
                 </button>
@@ -533,14 +529,14 @@ export default function HomePage() {
           {error && (
             <div
               role="alert"
-              className="animate-fade-in rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive"
+              className="rounded-lg border border-foreground/30 bg-muted px-4 py-3 text-sm text-foreground"
             >
               {error}
             </div>
           )}
 
           <div className="grid gap-6 md:grid-cols-[1fr_minmax(200px,240px)]">
-            <div className="rounded-lg border border-border bg-card p-4 shadow-sm">
+            <div className="rounded-lg border border-border bg-card p-4">
               <p className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                 Progress
               </p>
@@ -548,21 +544,16 @@ export default function HomePage() {
                 {STAGES.map((s, i) => {
                   const isActive = s.key === stage
                   const isDone = hasResult || activeStageIdx > i
+                  const { icon, colorClass } = progressIcon(s.key, isDone, isActive)
                   return (
                     <li key={s.key} className="flex items-center gap-3">
                       <span
                         className={`
                           flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-medium
-                          ${
-                            isDone
-                              ? 'border-foreground/20 bg-muted text-foreground'
-                              : isActive
-                                ? 'border-foreground/40 bg-background text-foreground'
-                                : 'border-border text-muted-foreground'
-                          }
+                          ${colorClass}
                         `}
                       >
-                        {isDone ? '✓' : i + 1}
+                        {isDone ? icon : isActive ? icon : i + 1}
                       </span>
                       <span
                         className={`text-sm ${isActive ? 'font-medium text-foreground' : 'text-muted-foreground'}`}
@@ -576,7 +567,7 @@ export default function HomePage() {
             </div>
 
             {result.evaluation && (
-              <div className="animate-fade-in rounded-lg border border-border bg-card p-4 shadow-sm">
+              <div className="rounded-lg border border-border bg-card p-4">
                 <div className="mb-3 flex items-start justify-between gap-2">
                   <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                     Quick read
@@ -596,7 +587,7 @@ export default function HomePage() {
         </div>
 
         {hasResult && (
-          <section className="animate-fade-in space-y-4">
+          <section className="space-y-4">
             <div className="flex flex-wrap gap-1 border-b border-border pb-2">
               {(
                 [
@@ -618,18 +609,18 @@ export default function HomePage() {
             </div>
 
             {activeTab === 'analysis' && result.analysis && (
-              <div className="animate-fade-in space-y-4">
-                <div className="rounded-lg border border-border bg-card p-5 shadow-sm">
+              <div className="space-y-4">
+                <div className="rounded-lg border border-border bg-card p-5">
                   <div className="mb-2 flex flex-wrap items-baseline gap-2">
                     <span className="text-xs text-muted-foreground">Complexity</span>
-                    <span className={`text-sm font-medium capitalize ${complexityClass(result.analysis.complexity)}`}>
+                    <span className="text-sm font-medium capitalize text-foreground">
                       {result.analysis.complexity}
                     </span>
                   </div>
                   <p className="text-[15px] leading-relaxed text-foreground">{result.analysis.explanation}</p>
                   {result.analysis.key_components.length > 0 && (
                     <div className="mt-4">
-                      <p className="mb-2 text-xs text-muted-foreground">In the mix</p>
+                      <p className="mb-2 text-xs text-muted-foreground">Key components</p>
                       <div className="flex flex-wrap gap-2">
                         {result.analysis.key_components.map((c, i) => (
                           <span
@@ -647,11 +638,11 @@ export default function HomePage() {
             )}
 
             {activeTab === 'translation' && result.translation && (
-              <div className="animate-fade-in space-y-4">
+              <div className="space-y-4">
                 <CodeBlock code={result.translation.translated_code} language="csharp" />
                 {result.translation.notes ? (
-                  <div className="rounded-lg border border-border bg-card p-5 shadow-sm">
-                    <p className="mb-2 text-xs text-muted-foreground">Notes</p>
+                  <div className="rounded-lg border border-border bg-card p-5">
+                    <p className="mb-2 text-xs font-medium text-muted-foreground">Migration Notes</p>
                     <p className="text-sm leading-relaxed text-muted-foreground whitespace-pre-wrap">
                       {result.translation.notes}
                     </p>
@@ -661,8 +652,8 @@ export default function HomePage() {
             )}
 
             {activeTab === 'evaluation' && result.evaluation && (
-              <div className="animate-fade-in space-y-4">
-                <div className="rounded-lg border border-border bg-card p-5 shadow-sm">
+              <div className="space-y-4">
+                <div className="rounded-lg border border-border bg-card p-5">
                   <div className="mb-4 grid gap-4 sm:grid-cols-2">
                     <ScoreBar label="Faithfulness" score={result.evaluation.faithfulness_score} />
                     <ScoreBar label="Idiomaticity" score={result.evaluation.idiomaticity_score} />
@@ -672,14 +663,24 @@ export default function HomePage() {
                   >
                     {result.evaluation.risk_level} risk
                   </span>
+
+                  <div className="mt-3 rounded-md border border-border bg-muted/30 px-3 py-2">
+                    <p className="text-xs font-medium text-muted-foreground mb-1">How scores are calculated</p>
+                    <ul className="space-y-0.5 text-xs text-muted-foreground">
+                      <li><span className="font-medium text-foreground">Faithfulness (0-100):</span> Does the C# preserve ALL PB business rules, DataWindow ops, and side effects?</li>
+                      <li><span className="font-medium text-foreground">Idiomaticity (0-100):</span> Does the C# feel like it was written by a senior .NET 8 engineer? (async/await, LINQ, DI)</li>
+                      <li><span className="font-medium text-foreground">Risk:</span> Low = safe to deploy, Medium = needs review, High = logic gaps detected</li>
+                    </ul>
+                  </div>
+
                   <div className="mt-4">
-                    <p className="mb-2 text-xs text-muted-foreground">Summary</p>
+                    <p className="mb-2 text-xs text-muted-foreground">Reviewer Summary</p>
                     <p className="text-[15px] leading-relaxed text-foreground">{result.evaluation.reviewer_note}</p>
                   </div>
                   <div className="mt-6 grid gap-6 sm:grid-cols-2">
                     {result.evaluation.strengths.length > 0 && (
                       <div>
-                        <p className="mb-2 text-xs font-medium text-emerald-800">What worked</p>
+                        <p className="mb-2 text-xs font-medium text-foreground">Strengths</p>
                         <ul className="space-y-1.5">
                           {result.evaluation.strengths.map((s, i) => (
                             <li key={i} className="text-sm text-muted-foreground">
@@ -691,7 +692,7 @@ export default function HomePage() {
                     )}
                     {result.evaluation.issues.length > 0 && (
                       <div>
-                        <p className="mb-2 text-xs font-medium text-rose-800">Worth fixing</p>
+                        <p className="mb-2 text-xs font-medium text-foreground">Issues</p>
                         <ul className="space-y-1.5">
                           {result.evaluation.issues.map((s, i) => (
                             <li key={i} className="text-sm text-muted-foreground">
@@ -707,10 +708,10 @@ export default function HomePage() {
             )}
 
             {activeTab === 'tests' && result.tests && (
-              <div className="animate-fade-in space-y-4">
+              <div className="space-y-4">
                 <CodeBlock code={result.tests.test_code} language="xUnit" />
                 {result.tests.notes ? (
-                  <div className="rounded-lg border border-border bg-card p-5 shadow-sm">
+                  <div className="rounded-lg border border-border bg-card p-5">
                     <p className="mb-2 text-xs text-muted-foreground">Coverage notes</p>
                     <p className="text-sm leading-relaxed text-muted-foreground whitespace-pre-wrap">
                       {result.tests.notes}
