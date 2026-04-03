@@ -3,28 +3,23 @@ import { Analytics } from '@vercel/analytics/next'
 import './globals.css'
 
 export const metadata = {
-  title: 'P2C Modernizer — AI-Powered Legacy Code Migration',
+  title: 'P2C — Legacy to C#',
   description:
-    'Transform PowerBuilder, COBOL, and VB6 into idiomatic C# .NET 8 with AI-driven analysis, translation, self-evaluation, and test generation.',
-  openGraph: {
-    title: 'P2C Modernizer',
-    description: 'AI-powered legacy code migration pipeline',
-    type: 'website',
-  },
+    'Paste PowerBuilder, COBOL, or VB6 code and get analysis, C# translation, quality checks, and tests.',
 }
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en">
       <head>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link
-          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+          href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap"
           rel="stylesheet"
         />
       </head>
-      <body className="font-sans antialiased bg-background text-foreground">
+      <body className="font-sans min-h-screen">
         {children}
         <Analytics />
       </body>

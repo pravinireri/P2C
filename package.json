@@ -13,8 +13,7 @@
     "next": "^15.2.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "tailwindcss": "^4.1.3",
-    "tw-animate-css": "^1.2.5"
+    "tailwindcss": "^4.1.3"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.2.2",
