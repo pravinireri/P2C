@@ -1,14 +1,3 @@
-"""
-Legacy Code Modernization API — P2C
-Main FastAPI application entry point.
-
-Pipeline upgrades:
-- Analyze + Translate run CONCURRENTLY via asyncio.gather (halves latency)
-- EvaluatorAgent scores the translation after it completes
-- All agent calls return UsageStats; totals are aggregated and surfaced in response
-- /stream-modernize sends SSE events so the frontend can show live progress
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -17,10 +6,7 @@ import os
 from pathlib import Path
 from typing import AsyncIterator
 
-# Auto-load .env from the backend directory so the server starts without
-# needing manually exported env vars in the shell session.
 from dotenv import load_dotenv
-# override=True ensures .env values beat any corrupted system environment variables
 load_dotenv(Path(__file__).parent / ".env", override=True)
 
 import fastapi
@@ -66,16 +52,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Service + Agent Initialisation ──────────────────────────────────────────
-
 llm_service = LLMService()
 analyzer = AnalyzerAgent(llm_service)
 translator = TranslatorAgent(llm_service)
 test_generator = TestGeneratorAgent(llm_service)
 evaluator = EvaluatorAgent(llm_service)
-
-
-# ── Helper ──────────────────────────────────────────────────────────────────
 
 def _aggregate_usage(*stats: _UsageStats) -> UsageStats:
     total = _UsageStats()
@@ -88,27 +69,18 @@ def _aggregate_usage(*stats: _UsageStats) -> UsageStats:
         estimated_cost_usd=total.estimated_cost_usd,
     )
 
-
-# ── Health ───────────────────────────────────────────────────────────────────
-
 @app.get("/health")
 async def health() -> dict[str, str]:
-    """Health check endpoint."""
     return {"status": "ok", "version": "2.0.0"}
-
-
-# ── Individual Endpoints ─────────────────────────────────────────────────────
 
 @app.post("/analyze", response_model=AnalyzeResponse)
 async def analyze_code(request: AnalyzeRequest) -> AnalyzeResponse:
-    """Analyze legacy code and provide an explanation."""
     result = await analyzer.analyze(request.code, request.language)
     return AnalyzeResponse(**result)
 
 
 @app.post("/translate", response_model=TranslateResponse)
 async def translate_code(request: TranslateRequest) -> TranslateResponse:
-    """Translate legacy code to the target language."""
     result = await translator.translate(
         request.code, request.source_language, request.target_language
     )
@@ -117,24 +89,13 @@ async def translate_code(request: TranslateRequest) -> TranslateResponse:
 
 @app.post("/generate-tests", response_model=TestGenerateResponse)
 async def generate_tests(request: TestGenerateRequest) -> TestGenerateResponse:
-    """Generate unit tests for translated code."""
     result = await test_generator.generate(request.code, request.language)
     return TestGenerateResponse(**result)
 
-
-# ── Full Pipeline ─────────────────────────────────────────────────────────────
-
 @app.post("/modernize", response_model=ModernizeResponse)
 async def modernize_code(request: ModernizeRequest) -> ModernizeResponse:
-    """
-    Full 4-stage pipeline:
-    1+2. Analyze + Translate concurrently
-    3.   Evaluate translation quality (LLM-as-judge)
-    4.   Generate xUnit tests
-    """
     import openai as _openai
     try:
-        # Stage 1+2: run concurrently — independent of each other
         (analysis, analysis_usage), (translation, translation_usage) = await asyncio.gather(
             analyzer.analyze_with_usage(request.code, request.source_language),
             translator.translate_with_usage(
@@ -144,7 +105,6 @@ async def modernize_code(request: ModernizeRequest) -> ModernizeResponse:
 
         translated_code = translation["translated_code"]
 
-        # Stage 3+4: run concurrently — evaluator and test generator both need translated code
         (eval_result, eval_usage), (tests, tests_usage) = await asyncio.gather(
             evaluator.evaluate(request.code, translated_code, request.source_language),
             test_generator.generate_with_usage(translated_code, request.target_language),
@@ -181,21 +141,12 @@ async def modernize_code(request: ModernizeRequest) -> ModernizeResponse:
     except Exception as exc:
         raise fastapi.HTTPException(status_code=500, detail=str(exc))
 
-
-# ── Streaming Endpoint (SSE) ──────────────────────────────────────────────────
-
 async def _stream_pipeline(request: ModernizeRequest) -> AsyncIterator[str]:
-    """
-    Server-Sent Events generator for the modernize pipeline.
-    Each stage emits a typed SSE event so the frontend can update incrementally.
-    """
-
     def _sse(event: str, data: dict) -> str:
         return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
     yield _sse("status", {"stage": "analyzing", "message": "Analyzing legacy code…"})
 
-    # Stage 1+2 concurrent
     try:
         (analysis, _), (translation, _) = await asyncio.gather(
             analyzer.analyze_with_usage(request.code, request.source_language),
@@ -214,7 +165,6 @@ async def _stream_pipeline(request: ModernizeRequest) -> AsyncIterator[str]:
 
     translated_code = translation["translated_code"]
 
-    # Stage 3+4 concurrent
     try:
         (eval_result, eval_usage), (tests, tests_usage) = await asyncio.gather(
             evaluator.evaluate(request.code, translated_code, request.source_language),
@@ -232,10 +182,6 @@ async def _stream_pipeline(request: ModernizeRequest) -> AsyncIterator[str]:
 
 @app.post("/stream-modernize")
 async def stream_modernize(request: ModernizeRequest) -> StreamingResponse:
-    """
-    Streaming version of /modernize using Server-Sent Events.
-    The frontend connects to this for real-time stage-by-stage updates.
-    """
     return StreamingResponse(
         _stream_pipeline(request),
         media_type="text/event-stream",

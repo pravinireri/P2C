@@ -1,12 +1,3 @@
-"""
-Evaluator Agent — the self-evaluating step of the pipeline.
-
-Scores the translation for faithfulness to the original PowerBuilder behavior
-and idiomaticity of the generated C#. Enforces DataWindow adapter usage,
-SQLCA error handling fidelity, INotificationService message preservation,
-and transaction boundary correctness.
-"""
-
 from __future__ import annotations
 
 import json
@@ -17,12 +8,6 @@ from ..services.llm_service import LLMService, UsageStats
 
 
 class EvaluatorAgent(BaseAgent):
-    """
-    LLM-as-judge: evaluates a code translation against the original source.
-
-    Returns structured scores so the UI can render confidence meters.
-    """
-
     def __init__(self, llm_service: LLMService) -> None:
         super().__init__(llm_service)
 
@@ -141,17 +126,6 @@ Example issue:
         translated_code: str,
         source_language: str = "PowerBuilder",
     ) -> tuple[dict, UsageStats]:
-        """
-        Evaluate the quality of a code translation.
-
-        Args:
-            original_code:   The original legacy source.
-            translated_code: The LLM-generated C# output.
-            source_language: Label for the source language.
-
-        Returns:
-            (evaluation_dict, UsageStats)
-        """
         user_prompt = (
             f"## Original {source_language} Code\n```\n{original_code}\n```\n\n"
             f"## Translated C# Code\n```csharp\n{translated_code}\n```\n\n"
@@ -166,7 +140,6 @@ Example issue:
         try:
             return json.loads(raw), usage
         except json.JSONDecodeError:
-            # Graceful fallback: extract JSON from markdown fences if present
             match = re.search(r"\{.*\}", raw, re.DOTALL)
             if match:
                 try:
@@ -174,7 +147,6 @@ Example issue:
                 except json.JSONDecodeError:
                     pass
 
-        # Hard fallback — surface the raw text as a reviewer note
         return {
             "faithfulness_score": 0,
             "idiomaticity_score": 0,

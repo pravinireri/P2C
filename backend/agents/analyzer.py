@@ -1,8 +1,3 @@
-"""
-Analyzer Agent - Analyzes and explains legacy code.
-Extended with analyze_with_usage() to return token consumption data.
-"""
-
 from __future__ import annotations
 
 import json
@@ -13,8 +8,6 @@ from ..utils.prompts import get_language_context
 
 
 class AnalyzerAgent(BaseAgent):
-    """Agent for analyzing and explaining legacy code."""
-
     def __init__(self, llm_service: LLMService) -> None:
         super().__init__(llm_service)
 
@@ -72,12 +65,10 @@ In key_components, list specific PB constructs found, e.g.:
             }
 
     async def analyze(self, code: str, language: str) -> dict:
-        """Analyze legacy code and return structured explanation."""
         result, _ = await self.analyze_with_usage(code, language)
         return result
 
     async def analyze_with_usage(self, code: str, language: str) -> tuple[dict, UsageStats]:
-        """Analyze legacy code; return (result_dict, UsageStats)."""
         user_prompt = (
             f"Analyze this {language} code and provide your analysis as JSON:\n\n"
             f"{get_language_context(language)}\n\n"

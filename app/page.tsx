@@ -73,14 +73,11 @@ end if`,
 
   CHOOSE CASE SQLCA.SQLCode
     CASE 0
-      // Success — return the salary
       return ldc_salary
     CASE 100
-      // No rows found for this employee
       MessageBox("Not Found", "No salary record for employee " + String(al_emp_id) + ".")
       return -1
     CASE ELSE
-      // Database error
       MessageBox("DB Error", SQLCA.SQLErrText)
       return -1
   END CHOOSE
@@ -145,29 +142,16 @@ async function readErrorMessage(res: Response): Promise<string> {
         .join(' ')
     }
   } catch {
-    /* use raw text */
   }
   return text.trim() || `Something went wrong (${res.status})`
 }
 
-/**
- * Normalise code strings returned by the LLM.
- *
- * The translator returns C# inside a JSON `"translated_code"` field.
- * Occasionally the model double-escapes newlines (literal `\\n` instead
- * of real `\n`), or uses `\\r\\n`.  After JSON.parse those survive as
- * the two-char sequences `\n` / `\r\n` in the JS string — which `<pre>`
- * renders as visible text, not line breaks.
- *
- * This helper converts any remaining literal escape sequences into real
- * whitespace characters so the `<pre>` block displays properly.
- */
 function normalizeCode(raw: string): string {
   return raw
-    .replace(/\\r\\n/g, '\n')  // literal \r\n  → real newline
-    .replace(/\\n/g, '\n')      // literal \n    → real newline
-    .replace(/\\t/g, '\t')      // literal \t    → real tab
-    .replace(/\t/g, '    ')      // tabs → 4 spaces for consistent indent
+    .replace(/\\r\\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/\\t/g, '\t')
+    .replace(/\t/g, '    ')
     .trimEnd()
 }
 
@@ -218,7 +202,6 @@ async function copyToClipboard(text: string, setCopied: (v: boolean) => void) {
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   } catch {
-    /* ignore */
   }
 }
 

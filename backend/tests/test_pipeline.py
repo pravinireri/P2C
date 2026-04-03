@@ -1,9 +1,3 @@
-"""
-Smoke tests for the P2C pipeline.
-Mocks LLMService so no real OpenAI calls are made.
-Run with: pytest tests/ -v
-"""
-
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch, MagicMock
@@ -11,7 +5,6 @@ from unittest.mock import AsyncMock, patch, MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
-# Set a dummy key before importing the app (avoids RuntimeError)
 import os
 os.environ.setdefault("OPENAI_API_KEY", "sk-test-dummy-key")
 
@@ -46,16 +39,11 @@ DUMMY_TESTS = {
 
 
 def _make_mock_llm():
-    """Return a patched LLMService that never calls OpenAI."""
     mock = MagicMock()
     mock.complete_with_usage = AsyncMock(return_value=("mocked", DUMMY_USAGE))
     return mock
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-
 def test_health():
-    """Health endpoint returns 200 and status ok."""
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
@@ -66,10 +54,6 @@ def test_health():
 @patch("backend.main.evaluator")
 @patch("backend.main.test_generator")
 def test_modernize_schema(mock_tests, mock_eval, mock_trans, mock_analyzer):
-    """
-    /modernize returns all required fields with correct types.
-    No real LLM calls are made.
-    """
     mock_analyzer.analyze_with_usage = AsyncMock(return_value=(DUMMY_ANALYSIS, DUMMY_USAGE))
     mock_trans.translate_with_usage = AsyncMock(return_value=(DUMMY_TRANSLATION, DUMMY_USAGE))
     mock_eval.evaluate = AsyncMock(return_value=(DUMMY_EVALUATION, DUMMY_USAGE))
@@ -83,19 +67,16 @@ def test_modernize_schema(mock_tests, mock_eval, mock_trans, mock_analyzer):
     assert response.status_code == 200, response.text
     data = response.json()
 
-    # Core fields
     assert isinstance(data["analysis"], str)
     assert isinstance(data["translated_code"], str)
     assert isinstance(data["test_cases"], str)
 
-    # Evaluation fields
     assert "evaluation" in data
     ev = data["evaluation"]
     assert 0 <= ev["faithfulness_score"] <= 100
     assert 0 <= ev["idiomaticity_score"] <= 100
     assert ev["risk_level"] in ("Low", "Medium", "High")
 
-    # Usage fields
     assert "usage" in data
     usage = data["usage"]
     assert usage["total_tokens"] > 0
@@ -107,7 +88,6 @@ def test_modernize_schema(mock_tests, mock_eval, mock_trans, mock_analyzer):
 @patch("backend.main.evaluator")
 @patch("backend.main.test_generator")
 def test_modernize_returns_key_components(mock_tests, mock_eval, mock_trans, mock_analyzer):
-    """key_components should be a list of strings."""
     mock_analyzer.analyze_with_usage = AsyncMock(return_value=(DUMMY_ANALYSIS, DUMMY_USAGE))
     mock_trans.translate_with_usage = AsyncMock(return_value=(DUMMY_TRANSLATION, DUMMY_USAGE))
     mock_eval.evaluate = AsyncMock(return_value=(DUMMY_EVALUATION, DUMMY_USAGE))
@@ -124,6 +104,5 @@ def test_modernize_returns_key_components(mock_tests, mock_eval, mock_trans, moc
 
 
 def test_modernize_rejects_missing_code():
-    """Request without 'code' field should return 422 Unprocessable Entity."""
     response = client.post("/modernize", json={"source_language": "powerbuilder"})
     assert response.status_code == 422

@@ -1,14 +1,6 @@
-"""
-Pydantic models for API request/response schemas.
-Extended with evaluation results and token usage tracking.
-"""
-
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
-
-
-# ── Request Models ──────────────────────────────────────────────────────────
 
 class AnalyzeRequest(BaseModel):
     code: str = Field(..., description="Legacy code to analyze")
@@ -31,11 +23,7 @@ class ModernizeRequest(BaseModel):
     source_language: str = Field(default="powerbuilder", description="Source language")
     target_language: str = Field(default="csharp", description="Target language")
 
-
-# ── Shared Sub-Models ────────────────────────────────────────────────────────
-
 class UsageStats(BaseModel):
-    """Aggregated token usage and estimated cost for the full pipeline run."""
     prompt_tokens: int = Field(0, description="Total prompt tokens consumed")
     completion_tokens: int = Field(0, description="Total completion tokens generated")
     total_tokens: int = Field(0, description="Sum of prompt + completion tokens")
@@ -43,16 +31,12 @@ class UsageStats(BaseModel):
 
 
 class EvaluationResult(BaseModel):
-    """Structured output from the EvaluatorAgent (LLM-as-judge)."""
     faithfulness_score: int = Field(..., ge=0, le=100, description="Logic preservation score 0–100")
     idiomaticity_score: int = Field(..., ge=0, le=100, description="C# idiom quality score 0–100")
     risk_level: str = Field(..., description="Deployment risk: Low | Medium | High")
     strengths: list[str] = Field(default_factory=list, description="What the translation did well")
     issues: list[str] = Field(default_factory=list, description="Issues found in the translation")
     reviewer_note: str = Field(..., description="Overall quality summary from the LLM judge")
-
-
-# ── Response Models ──────────────────────────────────────────────────────────
 
 class AnalyzeResponse(BaseModel):
     explanation: str = Field(..., description="Human-readable explanation of the code")

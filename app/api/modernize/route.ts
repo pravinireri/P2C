@@ -8,10 +8,6 @@ function backendBaseUrl(): string {
   return fromEnv.replace(/\/$/, '')
 }
 
-/**
- * Proxies POST /modernize to the FastAPI backend so the browser talks same-origin
- * to Next.js (no CORS). Configure BACKEND_URL on the server if the API is not on localhost:8000.
- */
 export async function POST(req: NextRequest) {
   let body: string
   try {

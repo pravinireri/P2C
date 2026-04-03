@@ -1,10 +1,3 @@
-"""
-Prompt templates and context utilities.
-Extended with deep PowerBuilder migration intelligence that encodes
-DataWindow semantics, SQLCA handling, and UI-driven patterns.
-"""
-
-# Language-specific migration context for better LLM output
 LANGUAGE_HINTS = {
     "powerbuilder": {
         "description": "PowerBuilder / PowerScript with DataWindow technology",

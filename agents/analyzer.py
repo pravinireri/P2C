@@ -1,8 +1,3 @@
-"""
-Analyzer Agent — responsible for understanding the legacy code structure,
-summarizing its purpose, and identifying complexity and potential issues.
-"""
-
 import json
 from services.openai_service import chat_completion
 from models.schemas import AnalysisResult
@@ -20,9 +15,6 @@ Return ONLY valid JSON. No markdown, no explanation.
 
 
 async def analyze(legacy_code: str, source_language: str = "PowerBuilder") -> AnalysisResult:
-    """
-    Analyze the given legacy code and return structured insights.
-    """
     user_prompt = (
         f"Source language: {source_language}\n\n"
         f"Code:\n```\n{legacy_code}\n```"
@@ -33,7 +25,6 @@ async def analyze(legacy_code: str, source_language: str = "PowerBuilder") -> An
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
-        # Graceful fallback if LLM wrapped response in markdown
         import re
         match = re.search(r"\{.*\}", raw, re.DOTALL)
         data = json.loads(match.group()) if match else {}
