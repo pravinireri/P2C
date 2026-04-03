@@ -15,8 +15,8 @@ from fastapi.testclient import TestClient
 import os
 os.environ.setdefault("OPENAI_API_KEY", "sk-test-dummy-key")
 
-from p2c.main import app  # noqa: E402
-from p2c.services.llm_service import UsageStats  # noqa: E402
+from backend.main import app  # noqa: E402
+from backend.services.llm_service import UsageStats  # noqa: E402
 
 client = TestClient(app)
 
@@ -61,10 +61,10 @@ def test_health():
     assert response.json()["status"] == "ok"
 
 
-@patch("p2c.main.analyzer")
-@patch("p2c.main.translator")
-@patch("p2c.main.evaluator")
-@patch("p2c.main.test_generator")
+@patch("backend.main.analyzer")
+@patch("backend.main.translator")
+@patch("backend.main.evaluator")
+@patch("backend.main.test_generator")
 def test_modernize_schema(mock_tests, mock_eval, mock_trans, mock_analyzer):
     """
     /modernize returns all required fields with correct types.
@@ -102,10 +102,10 @@ def test_modernize_schema(mock_tests, mock_eval, mock_trans, mock_analyzer):
     assert isinstance(usage["estimated_cost_usd"], float)
 
 
-@patch("p2c.main.analyzer")
-@patch("p2c.main.translator")
-@patch("p2c.main.evaluator")
-@patch("p2c.main.test_generator")
+@patch("backend.main.analyzer")
+@patch("backend.main.translator")
+@patch("backend.main.evaluator")
+@patch("backend.main.test_generator")
 def test_modernize_returns_key_components(mock_tests, mock_eval, mock_trans, mock_analyzer):
     """key_components should be a list of strings."""
     mock_analyzer.analyze_with_usage = AsyncMock(return_value=(DUMMY_ANALYSIS, DUMMY_USAGE))

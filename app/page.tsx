@@ -1,8 +1,6 @@
 'use client'
 
-import { FormEvent, useCallback, useEffect, useRef, useState } from 'react'
-
-// ── Types ─────────────────────────────────────────────────────────────────────
+import { FormEvent, useCallback, useState } from 'react'
 
 type Stage = 'idle' | 'analyzing' | 'translating' | 'evaluating' | 'testing' | 'done' | 'error'
 
@@ -40,11 +38,9 @@ type PipelineResult = {
 
 type ActiveTab = 'analysis' | 'translation' | 'evaluation' | 'tests'
 
-// ── Sample Snippets ───────────────────────────────────────────────────────────
-
 const SAMPLES: { label: string; language: string; code: string }[] = [
   {
-    label: 'PB Event Handler',
+    label: 'PB event handler',
     language: 'powerbuilder',
     code: `event clicked()
   int li_count
@@ -61,7 +57,7 @@ const SAMPLES: { label: string; language: string; code: string }[] = [
 end event`,
   },
   {
-    label: 'PB DataWindow Query',
+    label: 'PB query function',
     language: 'powerbuilder',
     code: `function long f_get_salary(long al_emp_id) returns decimal
   decimal ldc_salary
@@ -81,7 +77,7 @@ end event`,
 end function`,
   },
   {
-    label: 'PB Transaction',
+    label: 'PB save',
     language: 'powerbuilder',
     code: `event ue_save()
   int li_rtn
@@ -99,33 +95,78 @@ end event`,
   },
 ]
 
-// ── Pipeline Stage Config ─────────────────────────────────────────────────────
-
-const STAGES: { key: Stage; label: string; icon: string }[] = [
-  { key: 'analyzing', label: 'Analyzing', icon: '🔍' },
-  { key: 'translating', label: 'Translating', icon: '⚙️' },
-  { key: 'evaluating', label: 'Evaluating', icon: '🧪' },
-  { key: 'testing', label: 'Testing', icon: '✅' },
+const STAGES: { key: Stage; label: string }[] = [
+  { key: 'analyzing', label: 'Understand' },
+  { key: 'translating', label: 'Translate' },
+  { key: 'evaluating', label: 'Review' },
+  { key: 'testing', label: 'Tests' },
 ]
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function riskColour(risk: string) {
-  if (risk === 'Low') return 'text-emerald-400 bg-emerald-400/10 border-emerald-400/30'
-  if (risk === 'High') return 'text-rose-400 bg-rose-400/10 border-rose-400/30'
-  return 'text-amber-400 bg-amber-400/10 border-amber-400/30'
+function modernizeUrl(): string {
+  const direct = process.env.NEXT_PUBLIC_API_BASE_URL?.trim()
+  if (direct) return `${direct.replace(/\/$/, '')}/modernize`
+  return '/api/modernize'
 }
 
-function complexityColour(c: string) {
-  if (c === 'low') return 'text-emerald-400'
-  if (c === 'high') return 'text-rose-400'
-  return 'text-amber-400'
+async function readErrorMessage(res: Response): Promise<string> {
+  const text = await res.text()
+  try {
+    const j = JSON.parse(text) as { detail?: unknown }
+    if (typeof j.detail === 'string') return j.detail
+    if (Array.isArray(j.detail)) {
+      return j.detail
+        .map((item: unknown) => {
+          if (item && typeof item === 'object' && 'msg' in item) {
+            return String((item as { msg?: string }).msg ?? item)
+          }
+          return String(item)
+        })
+        .join(' ')
+    }
+  } catch {
+    /* use raw text */
+  }
+  return text.trim() || `Something went wrong (${res.status})`
 }
 
-function scoreColour(score: number) {
-  if (score >= 80) return 'bg-emerald-500'
-  if (score >= 60) return 'bg-amber-500'
-  return 'bg-rose-500'
+function clampScore(n: number): number {
+  if (!Number.isFinite(n)) return 0
+  return Math.min(100, Math.max(0, Math.round(n)))
+}
+
+function normalizeEvaluation(raw: unknown): Evaluation | null {
+  if (!raw || typeof raw !== 'object') return null
+  const e = raw as Record<string, unknown>
+  return {
+    faithfulness_score: clampScore(Number(e.faithfulness_score)),
+    idiomaticity_score: clampScore(Number(e.idiomaticity_score)),
+    risk_level: typeof e.risk_level === 'string' ? e.risk_level : 'Medium',
+    strengths: Array.isArray(e.strengths)
+      ? e.strengths.filter((x): x is string => typeof x === 'string')
+      : [],
+    issues: Array.isArray(e.issues) ? e.issues.filter((x): x is string => typeof x === 'string') : [],
+    reviewer_note: typeof e.reviewer_note === 'string' ? e.reviewer_note : '',
+  }
+}
+
+function riskClass(risk: string) {
+  const r = risk.toLowerCase()
+  if (r === 'low') return 'border-emerald-600/25 bg-emerald-50 text-emerald-900'
+  if (r === 'high') return 'border-rose-600/25 bg-rose-50 text-rose-900'
+  return 'border-amber-600/25 bg-amber-50 text-amber-900'
+}
+
+function complexityClass(c: string) {
+  const x = c.toLowerCase()
+  if (x === 'low') return 'text-emerald-700'
+  if (x === 'high') return 'text-rose-700'
+  return 'text-amber-800'
+}
+
+function scoreBarClass(score: number) {
+  if (score >= 80) return 'bg-emerald-600'
+  if (score >= 60) return 'bg-amber-600'
+  return 'bg-rose-600'
 }
 
 async function copyToClipboard(text: string, setCopied: (v: boolean) => void) {
@@ -146,11 +187,11 @@ function generateMarkdownReport(
   const now = new Date().toISOString().slice(0, 19).replace('T', ' ')
   const { analysis, translation, evaluation, tests } = result
 
-  return `# P2C Migration Report
-Generated: ${now}  
-Source language: ${sourceLanguage}
+  return `# P2C migration notes
+Generated: ${now}
+Source: ${sourceLanguage}
 
-## Original Code
+## Original
 
 \`\`\`${sourceLanguage}
 ${originalCode}
@@ -158,62 +199,58 @@ ${originalCode}
 
 ## Analysis
 
-**Complexity:** ${analysis?.complexity ?? 'N/A'}
+Complexity: ${analysis?.complexity ?? '—'}
 
 ${analysis?.explanation ?? ''}
 
-**Key Components:**
+**Parts worth noting:**  
 ${(analysis?.key_components ?? []).map((c) => `- ${c}`).join('\n')}
 
-## Translated C# Code
+## C#
 
 \`\`\`csharp
 ${translation?.translated_code ?? ''}
 \`\`\`
 
-### Translation Notes
+### Notes
 
 ${translation?.notes ?? ''}
 
-## Quality Evaluation
+## Quality
 
-| Metric | Score |
+| | |
 |---|---|
-| Faithfulness | ${evaluation?.faithfulness_score ?? 'N/A'}/100 |
-| Idiomaticity | ${evaluation?.idiomaticity_score ?? 'N/A'}/100 |
-| Risk Level | ${evaluation?.risk_level ?? 'N/A'} |
+| Faithfulness | ${evaluation?.faithfulness_score ?? '—'}/100 |
+| Idiomaticity | ${evaluation?.idiomaticity_score ?? '—'}/100 |
+| Risk | ${evaluation?.risk_level ?? '—'} |
 
-**Strengths:**
+**Strengths:**  
 ${(evaluation?.strengths ?? []).map((s) => `- ${s}`).join('\n')}
 
-**Issues:**
+**Watch out:**  
 ${(evaluation?.issues ?? []).map((i) => `- ${i}`).join('\n')}
 
-**Reviewer Note:**
-${evaluation?.reviewer_note ?? ''}
+**Summary:** ${evaluation?.reviewer_note ?? ''}
 
-## Generated Tests
+## Tests
 
 \`\`\`csharp
 ${tests?.test_code ?? ''}
 \`\`\`
 
-### Test Coverage Notes
-
 ${tests?.notes ?? ''}
 `
 }
-
-// ── Sub-Components ────────────────────────────────────────────────────────────
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
   return (
     <button
+      type="button"
       onClick={() => copyToClipboard(text, setCopied)}
-      className="flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs text-muted-foreground transition hover:border-primary/50 hover:text-primary"
+      className="rounded border border-border px-2 py-1 text-xs text-muted-foreground transition hover:border-foreground/20 hover:text-foreground"
     >
-      {copied ? '✓ Copied' : '⎘ Copy'}
+      {copied ? 'Copied' : 'Copy'}
     </button>
   )
 }
@@ -223,11 +260,11 @@ function ScoreBar({ label, score }: { label: string; score: number }) {
     <div className="space-y-1.5">
       <div className="flex justify-between text-xs">
         <span className="text-muted-foreground">{label}</span>
-        <span className="font-semibold tabular-nums">{score}/100</span>
+        <span className="tabular-nums font-medium text-foreground">{score}/100</span>
       </div>
-      <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
         <div
-          className={`score-bar-fill h-full rounded-full ${scoreColour(score)}`}
+          className={`score-bar-fill h-full rounded-full ${scoreBarClass(score)}`}
           style={{ '--target-width': `${score}%` } as React.CSSProperties}
         />
       </div>
@@ -248,14 +285,16 @@ function TabButton({
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       disabled={disabled}
       className={`
-        whitespace-nowrap rounded-lg px-4 py-2 text-sm font-medium transition
+        whitespace-nowrap rounded-md px-3 py-1.5 text-sm transition
         disabled:pointer-events-none disabled:opacity-40
-        ${active
-          ? 'bg-primary/10 text-primary border border-primary/30'
-          : 'text-muted-foreground hover:text-foreground hover:bg-secondary border border-transparent'
+        ${
+          active
+            ? 'bg-foreground text-background'
+            : 'text-muted-foreground hover:bg-muted hover:text-foreground'
         }
       `}
     >
@@ -266,19 +305,15 @@ function TabButton({
 
 function CodeBlock({ code, language = '' }: { code: string; language?: string }) {
   return (
-    <div className="relative rounded-xl border border-border bg-[oklch(0.07_0.01_240)] overflow-hidden">
-      <div className="flex items-center justify-between border-b border-border px-4 py-2">
-        <span className="text-xs text-muted-foreground font-mono">{language || 'code'}</span>
+    <div className="code-surface overflow-hidden rounded-lg border border-border">
+      <div className="flex items-center justify-between border-b border-border px-3 py-2">
+        <span className="font-mono text-xs text-muted-foreground">{language || 'code'}</span>
         <CopyButton text={code} />
       </div>
-      <pre className="code-editor overflow-x-auto p-4 text-sm text-emerald-300 leading-relaxed">
-        {code}
-      </pre>
+      <pre className="code-editor overflow-x-auto p-4 text-[13px] leading-relaxed">{code}</pre>
     </div>
   )
 }
-
-// ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function HomePage() {
   const [legacyCode, setLegacyCode] = useState(SAMPLES[0].code)
@@ -292,14 +327,6 @@ export default function HomePage() {
     tests: null,
   })
   const [activeTab, setActiveTab] = useState<ActiveTab>('analysis')
-  const eventSourceRef = useRef<EventSource | null>(null)
-
-  const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000'
-
-  // Cleanup SSE on unmount
-  useEffect(() => {
-    return () => eventSourceRef.current?.close()
-  }, [])
 
   const handleSampleSelect = useCallback((idx: number) => {
     setLegacyCode(SAMPLES[idx].code)
@@ -310,32 +337,26 @@ export default function HomePage() {
     e.preventDefault()
     if (!legacyCode.trim()) return
 
-    // Reset state
     setError('')
     setStage('analyzing')
     setResult({ analysis: null, translation: null, evaluation: null, tests: null })
-    eventSourceRef.current?.close()
 
     try {
-      // Use the non-streaming endpoint as fetch (SSE POST isn't broadly supported via EventSource)
-      const res = await fetch(`${apiBase}/modernize`, {
+      const res = await fetch(modernizeUrl(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code: legacyCode, source_language: sourceLanguage }),
       })
 
       if (!res.ok) {
-        const msg = await res.text()
-        throw new Error(msg || `Server error ${res.status}`)
+        throw new Error(await readErrorMessage(res))
       }
 
-      // Stream the JSON response body progressively to animate stages
       const reader = res.body?.getReader()
       const decoder = new TextDecoder()
       let body = ''
 
       if (reader) {
-        // Animate through stages while waiting
         const stageTimers = [
           setTimeout(() => setStage('translating'), 1200),
           setTimeout(() => setStage('evaluating'), 2400),
@@ -353,22 +374,35 @@ export default function HomePage() {
         body = await res.text()
       }
 
-      const json = JSON.parse(body)
+      let json: Record<string, unknown>
+      try {
+        json = JSON.parse(body) as Record<string, unknown>
+      } catch {
+        throw new Error('The server returned something that is not valid JSON.')
+      }
 
+      const evaluation = normalizeEvaluation(json.evaluation)
+      if (!evaluation) {
+        throw new Error('The response did not include a usable evaluation block.')
+      }
+
+      const keyComponents = json.key_components
       setResult({
         analysis: {
-          explanation: json.analysis,
-          complexity: json.complexity,
-          key_components: json.key_components ?? [],
+          explanation: typeof json.analysis === 'string' ? json.analysis : '',
+          complexity: typeof json.complexity === 'string' ? json.complexity : 'unknown',
+          key_components: Array.isArray(keyComponents)
+            ? keyComponents.filter((x): x is string => typeof x === 'string')
+            : [],
         },
         translation: {
-          translated_code: json.translated_code,
-          notes: json.translation_notes,
+          translated_code: typeof json.translated_code === 'string' ? json.translated_code : '',
+          notes: typeof json.translation_notes === 'string' ? json.translation_notes : '',
         },
-        evaluation: json.evaluation,
+        evaluation,
         tests: {
-          test_code: json.test_cases,
-          notes: json.test_notes,
+          test_code: typeof json.test_cases === 'string' ? json.test_cases : '',
+          notes: typeof json.test_notes === 'string' ? json.test_notes : '',
         },
       })
 
@@ -387,68 +421,44 @@ export default function HomePage() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `p2c-migration-report-${Date.now()}.md`
+    a.download = `p2c-notes-${Date.now()}.md`
     a.click()
     URL.revokeObjectURL(url)
   }
 
   const isRunning = stage !== 'idle' && stage !== 'done' && stage !== 'error'
   const hasResult = stage === 'done' && result.analysis !== null
-
   const activeStageIdx = STAGES.findIndex((s) => s.key === stage)
 
   return (
-    <main className="min-h-screen px-4 py-8 md:px-8 lg:px-12">
-      <div className="mx-auto flex max-w-7xl flex-col gap-8">
-
-        {/* ── Header ── */}
-        <header className="space-y-3">
-          <div className="flex items-center gap-2">
-            <span className="rounded-md border border-primary/30 bg-primary/10 px-2 py-0.5 font-mono text-xs text-primary">
-              v2.0
-            </span>
-            <span className="text-xs text-muted-foreground uppercase tracking-widest">
-              AI Migration Pipeline
-            </span>
-          </div>
-          <h1 className="shimmer-text text-4xl font-bold tracking-tight md:text-5xl">
-            P2C Modernizer
-          </h1>
-          <p className="max-w-2xl text-base text-muted-foreground">
-            Analyze → Translate → Evaluate → Test. A self-evaluating AI pipeline that turns
-            legacy PowerBuilder, COBOL &amp; VB6 into production-grade C# .NET 8.
+    <main className="min-h-screen px-4 py-10 md:px-8">
+      <div className="mx-auto flex max-w-3xl flex-col gap-10">
+        <header className="animate-fade-in space-y-3">
+          <p className="text-sm text-muted-foreground">Legacy code → C# (.NET 8)</p>
+          <h1 className="text-3xl font-semibold tracking-tight text-foreground md:text-4xl">P2C</h1>
+          <p className="max-w-xl text-[15px] leading-relaxed text-muted-foreground">
+            Paste what you have. You get a short read on what it does, C# that matches the intent, a
+            blunt quality pass, and starter tests. Nothing fancy — just enough to move forward.
           </p>
-          <div className="flex flex-wrap gap-2 pt-1">
-            {['GPT-4o', 'FastAPI', 'Next.js 15', 'LLM-as-Judge', 'SSE Streaming'].map((tag) => (
-              <span
-                key={tag}
-                className="rounded-full border border-border bg-secondary px-3 py-0.5 text-xs text-muted-foreground"
-              >
-                {tag}
-              </span>
-            ))}
-          </div>
         </header>
 
-        <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
-
-          {/* ── Left: Editor + Submit ── */}
-          <div className="flex flex-col gap-4">
-
-            {/* Sample selector */}
+        <div className="flex flex-col gap-8">
+          <div className="space-y-3">
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Examples</p>
             <div className="flex flex-wrap gap-2">
-              <span className="self-center text-xs text-muted-foreground">Try a sample:</span>
               {SAMPLES.map((s, i) => (
                 <button
                   key={s.label}
+                  type="button"
                   onClick={() => handleSampleSelect(i)}
                   disabled={isRunning}
                   className={`
-                    rounded-lg border px-3 py-1.5 text-xs font-medium transition
+                    rounded-md border px-3 py-1.5 text-sm transition
                     disabled:pointer-events-none disabled:opacity-40
-                    ${legacyCode === s.code
-                      ? 'border-primary/40 bg-primary/10 text-primary'
-                      : 'border-border text-muted-foreground hover:border-border/80 hover:text-foreground'
+                    ${
+                      legacyCode === s.code
+                        ? 'border-foreground/30 bg-muted text-foreground'
+                        : 'border-border text-muted-foreground hover:border-foreground/20 hover:text-foreground'
                     }
                   `}
                 >
@@ -456,174 +466,139 @@ export default function HomePage() {
                 </button>
               ))}
             </div>
-
-            {/* Code editor */}
-            <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-              <div className="relative overflow-hidden rounded-xl border border-border bg-[oklch(0.07_0.01_240)] transition focus-within:border-primary/50 focus-within:ring-1 focus-within:ring-primary/20">
-                <div className="flex items-center gap-2 border-b border-border bg-secondary/40 px-4 py-2">
-                  <div className="flex gap-1.5">
-                    <span className="h-3 w-3 rounded-full bg-rose-500/70" />
-                    <span className="h-3 w-3 rounded-full bg-amber-500/70" />
-                    <span className="h-3 w-3 rounded-full bg-emerald-500/70" />
-                  </div>
-                  <span className="ml-2 font-mono text-xs text-muted-foreground">
-                    {sourceLanguage}.pb
-                  </span>
-                </div>
-                <textarea
-                  id="legacy-code-input"
-                  value={legacyCode}
-                  onChange={(e) => setLegacyCode(e.target.value)}
-                  rows={18}
-                  disabled={isRunning}
-                  className="code-editor w-full bg-transparent p-5 text-emerald-200 outline-none disabled:opacity-60"
-                  placeholder="Paste your legacy PowerBuilder, COBOL, or VB6 code here…"
-                  spellCheck={false}
-                />
-              </div>
-
-              <div className="flex flex-wrap items-center gap-3">
-                <div className="flex items-center gap-2">
-                  <label className="text-xs text-muted-foreground whitespace-nowrap">Source:</label>
-                  <select
-                    value={sourceLanguage}
-                    onChange={(e) => setSourceLanguage(e.target.value)}
-                    disabled={isRunning}
-                    className="rounded-lg border border-border bg-secondary px-3 py-1.5 text-sm text-foreground outline-none focus:border-primary/50"
-                  >
-                    <option value="powerbuilder">PowerBuilder</option>
-                    <option value="cobol">COBOL</option>
-                    <option value="vb6">VB6</option>
-                  </select>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={isRunning || !legacyCode.trim()}
-                  id="run-pipeline-btn"
-                  className="
-                    inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-6 text-sm font-semibold
-                    text-primary-foreground transition hover:opacity-90
-                    disabled:cursor-not-allowed disabled:opacity-50
-                  "
-                >
-                  {isRunning
-                    ? <><span className="animate-spin">⟳</span> Running…</>
-                    : <><span>▶</span> Run Pipeline</>
-                  }
-                </button>
-
-                {hasResult && (
-                  <button
-                    type="button"
-                    onClick={handleDownloadReport}
-                    className="inline-flex h-10 items-center gap-2 rounded-lg border border-border px-4 text-sm text-muted-foreground transition hover:border-primary/40 hover:text-foreground"
-                  >
-                    ↓ Download Report
-                  </button>
-                )}
-              </div>
-            </form>
-
-            {error && (
-              <div className="animate-slide-up rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive-foreground">
-                <span className="font-semibold">Error: </span>{error}
-              </div>
-            )}
           </div>
 
-          {/* ── Right: Pipeline Status + Evaluation Card ── */}
-          <div className="flex flex-col gap-4">
+          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+            <label htmlFor="legacy-code-input" className="text-sm font-medium text-foreground">
+              Your code
+            </label>
+            <div className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+              <div className="border-b border-border px-3 py-2">
+                <span className="font-mono text-xs text-muted-foreground">{sourceLanguage}</span>
+              </div>
+              <textarea
+                id="legacy-code-input"
+                value={legacyCode}
+                onChange={(e) => setLegacyCode(e.target.value)}
+                rows={16}
+                disabled={isRunning}
+                className="code-editor code-surface w-full border-0 p-4 outline-none ring-0 disabled:opacity-60"
+                placeholder="Paste legacy code here."
+                spellCheck={false}
+              />
+            </div>
 
-            {/* Pipeline progress */}
-            <div className="rounded-xl border border-border bg-card p-5 space-y-4">
-              <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-                Pipeline
-              </h2>
-              <div className="space-y-3">
+            <div className="flex flex-wrap items-end gap-4">
+              <div className="flex flex-col gap-1">
+                <span className="text-xs text-muted-foreground">Language</span>
+                <select
+                  value={sourceLanguage}
+                  onChange={(e) => setSourceLanguage(e.target.value)}
+                  disabled={isRunning}
+                  className="rounded-md border border-border bg-background px-3 py-2 text-sm outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <option value="powerbuilder">PowerBuilder</option>
+                  <option value="cobol">COBOL</option>
+                  <option value="vb6">VB6</option>
+                </select>
+              </div>
+
+              <button
+                type="submit"
+                disabled={isRunning || !legacyCode.trim()}
+                id="run-pipeline-btn"
+                className="rounded-md bg-foreground px-5 py-2 text-sm font-medium text-background transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isRunning ? 'Working…' : 'Run'}
+              </button>
+
+              {hasResult && (
+                <button
+                  type="button"
+                  onClick={handleDownloadReport}
+                  className="rounded-md border border-border px-4 py-2 text-sm text-muted-foreground transition hover:border-foreground/25 hover:text-foreground"
+                >
+                  Download notes
+                </button>
+              )}
+            </div>
+          </form>
+
+          {error && (
+            <div
+              role="alert"
+              className="animate-fade-in rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive"
+            >
+              {error}
+            </div>
+          )}
+
+          <div className="grid gap-6 md:grid-cols-[1fr_minmax(200px,240px)]">
+            <div className="rounded-lg border border-border bg-card p-4 shadow-sm">
+              <p className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Progress
+              </p>
+              <ul className="space-y-3">
                 {STAGES.map((s, i) => {
                   const isActive = s.key === stage
                   const isDone = hasResult || activeStageIdx > i
                   return (
-                    <div key={s.key} className="flex items-center gap-3">
+                    <li key={s.key} className="flex items-center gap-3">
                       <span
                         className={`
-                          flex h-8 w-8 items-center justify-center rounded-lg border text-sm transition
-                          ${isDone ? 'border-primary/40 bg-primary/10 text-primary'
-                            : isActive ? 'border-primary/60 bg-primary/20 text-primary animate-pulse'
-                            : 'border-border bg-secondary text-muted-foreground'
+                          flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-medium
+                          ${
+                            isDone
+                              ? 'border-foreground/20 bg-muted text-foreground'
+                              : isActive
+                                ? 'border-foreground/40 bg-background text-foreground'
+                                : 'border-border text-muted-foreground'
                           }
                         `}
                       >
-                        {isDone ? '✓' : s.icon}
+                        {isDone ? '✓' : i + 1}
                       </span>
-                      <div className="flex-1">
-                        <p className={`text-sm font-medium ${isActive ? 'text-primary' : isDone ? 'text-foreground' : 'text-muted-foreground'}`}>
-                          {s.label}
-                        </p>
-                      </div>
-                      {isActive && (
-                        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
-                      )}
-                    </div>
+                      <span
+                        className={`text-sm ${isActive ? 'font-medium text-foreground' : 'text-muted-foreground'}`}
+                      >
+                        {s.label}
+                      </span>
+                    </li>
                   )
                 })}
-              </div>
+              </ul>
             </div>
 
-            {/* Evaluation card */}
             {result.evaluation && (
-              <div className="animate-slide-up rounded-xl border border-border bg-card p-5 space-y-4">
-                <div className="flex items-center justify-between">
-                  <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-                    Quality Score
-                  </h2>
+              <div className="animate-fade-in rounded-lg border border-border bg-card p-4 shadow-sm">
+                <div className="mb-3 flex items-start justify-between gap-2">
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    Quick read
+                  </p>
                   <span
-                    className={`rounded-full border px-3 py-0.5 text-xs font-semibold ${riskColour(result.evaluation.risk_level)}`}
+                    className={`rounded-full border px-2 py-0.5 text-xs font-medium ${riskClass(result.evaluation.risk_level)}`}
                   >
-                    {result.evaluation.risk_level} Risk
+                    {result.evaluation.risk_level} risk
                   </span>
                 </div>
                 <ScoreBar label="Faithfulness" score={result.evaluation.faithfulness_score} />
+                <div className="h-3" />
                 <ScoreBar label="Idiomaticity" score={result.evaluation.idiomaticity_score} />
-
-                {result.evaluation.strengths.length > 0 && (
-                  <div>
-                    <p className="text-xs font-medium text-emerald-400 mb-1">✓ Strengths</p>
-                    <ul className="space-y-1">
-                      {result.evaluation.strengths.slice(0, 3).map((s, i) => (
-                        <li key={i} className="text-xs text-muted-foreground">• {s}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {result.evaluation.issues.length > 0 && (
-                  <div>
-                    <p className="text-xs font-medium text-rose-400 mb-1">⚠ Issues</p>
-                    <ul className="space-y-1">
-                      {result.evaluation.issues.slice(0, 3).map((s, i) => (
-                        <li key={i} className="text-xs text-muted-foreground">• {s}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
               </div>
             )}
           </div>
         </div>
 
-        {/* ── Results Tabs ── */}
         {hasResult && (
-          <section className="animate-slide-up space-y-4">
-            <div className="flex flex-wrap gap-2 border-b border-border pb-3">
+          <section className="animate-fade-in space-y-4">
+            <div className="flex flex-wrap gap-1 border-b border-border pb-2">
               {(
                 [
-                  { key: 'analysis', label: '🔍 Analysis' },
-                  { key: 'translation', label: '⚙️ C# Translation' },
-                  { key: 'evaluation', label: '🧪 Evaluation' },
-                  { key: 'tests', label: '✅ Test Cases' },
-                ] as { key: ActiveTab; label: string }[]
+                  { key: 'analysis' as const, label: 'Analysis' },
+                  { key: 'translation' as const, label: 'C#' },
+                  { key: 'evaluation' as const, label: 'Review' },
+                  { key: 'tests' as const, label: 'Tests' },
+                ] as const
               ).map((tab) => (
                 <TabButton
                   key={tab.key}
@@ -637,21 +612,24 @@ export default function HomePage() {
             </div>
 
             {activeTab === 'analysis' && result.analysis && (
-              <div className="animate-slide-up space-y-4">
-                <div className="rounded-xl border border-border bg-card p-5 space-y-3">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-muted-foreground uppercase tracking-wide">Complexity</span>
-                    <span className={`text-sm font-semibold capitalize ${complexityColour(result.analysis.complexity)}`}>
+              <div className="animate-fade-in space-y-4">
+                <div className="rounded-lg border border-border bg-card p-5 shadow-sm">
+                  <div className="mb-2 flex flex-wrap items-baseline gap-2">
+                    <span className="text-xs text-muted-foreground">Complexity</span>
+                    <span className={`text-sm font-medium capitalize ${complexityClass(result.analysis.complexity)}`}>
                       {result.analysis.complexity}
                     </span>
                   </div>
-                  <p className="text-sm text-foreground leading-relaxed">{result.analysis.explanation}</p>
+                  <p className="text-[15px] leading-relaxed text-foreground">{result.analysis.explanation}</p>
                   {result.analysis.key_components.length > 0 && (
-                    <div>
-                      <p className="text-xs text-muted-foreground mb-2">Key Components</p>
+                    <div className="mt-4">
+                      <p className="mb-2 text-xs text-muted-foreground">In the mix</p>
                       <div className="flex flex-wrap gap-2">
                         {result.analysis.key_components.map((c, i) => (
-                          <span key={i} className="rounded-md border border-border bg-secondary px-2.5 py-1 text-xs text-foreground">
+                          <span
+                            key={i}
+                            className="rounded-md border border-border bg-muted/50 px-2 py-1 text-xs text-foreground"
+                          >
                             {c}
                           </span>
                         ))}
@@ -663,50 +641,56 @@ export default function HomePage() {
             )}
 
             {activeTab === 'translation' && result.translation && (
-              <div className="animate-slide-up space-y-4">
+              <div className="animate-fade-in space-y-4">
                 <CodeBlock code={result.translation.translated_code} language="csharp" />
-                {result.translation.notes && (
-                  <div className="rounded-xl border border-border bg-card p-5">
-                    <p className="text-xs text-muted-foreground mb-2 uppercase tracking-wide">Translation Notes</p>
-                    <p className="text-sm text-muted-foreground leading-relaxed whitespace-pre-wrap">{result.translation.notes}</p>
+                {result.translation.notes ? (
+                  <div className="rounded-lg border border-border bg-card p-5 shadow-sm">
+                    <p className="mb-2 text-xs text-muted-foreground">Notes</p>
+                    <p className="text-sm leading-relaxed text-muted-foreground whitespace-pre-wrap">
+                      {result.translation.notes}
+                    </p>
                   </div>
-                )}
+                ) : null}
               </div>
             )}
 
             {activeTab === 'evaluation' && result.evaluation && (
-              <div className="animate-slide-up space-y-4">
-                <div className="rounded-xl border border-border bg-card p-5 space-y-4">
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <ScoreBar label="Faithfulness Score" score={result.evaluation.faithfulness_score} />
-                    <ScoreBar label="Idiomaticity Score" score={result.evaluation.idiomaticity_score} />
+              <div className="animate-fade-in space-y-4">
+                <div className="rounded-lg border border-border bg-card p-5 shadow-sm">
+                  <div className="mb-4 grid gap-4 sm:grid-cols-2">
+                    <ScoreBar label="Faithfulness" score={result.evaluation.faithfulness_score} />
+                    <ScoreBar label="Idiomaticity" score={result.evaluation.idiomaticity_score} />
                   </div>
-                  <div className="pt-2">
-                    <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${riskColour(result.evaluation.risk_level)}`}>
-                      {result.evaluation.risk_level} Risk
-                    </span>
+                  <span
+                    className={`inline-block rounded-full border px-2 py-1 text-xs font-medium ${riskClass(result.evaluation.risk_level)}`}
+                  >
+                    {result.evaluation.risk_level} risk
+                  </span>
+                  <div className="mt-4">
+                    <p className="mb-2 text-xs text-muted-foreground">Summary</p>
+                    <p className="text-[15px] leading-relaxed text-foreground">{result.evaluation.reviewer_note}</p>
                   </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground mb-2 uppercase tracking-wide">Reviewer Note</p>
-                    <p className="text-sm text-foreground leading-relaxed">{result.evaluation.reviewer_note}</p>
-                  </div>
-                  <div className="grid gap-4 md:grid-cols-2">
+                  <div className="mt-6 grid gap-6 sm:grid-cols-2">
                     {result.evaluation.strengths.length > 0 && (
                       <div>
-                        <p className="text-xs font-medium text-emerald-400 mb-2">✓ Strengths</p>
+                        <p className="mb-2 text-xs font-medium text-emerald-800">What worked</p>
                         <ul className="space-y-1.5">
                           {result.evaluation.strengths.map((s, i) => (
-                            <li key={i} className="text-sm text-muted-foreground">• {s}</li>
+                            <li key={i} className="text-sm text-muted-foreground">
+                              {s}
+                            </li>
                           ))}
                         </ul>
                       </div>
                     )}
                     {result.evaluation.issues.length > 0 && (
                       <div>
-                        <p className="text-xs font-medium text-rose-400 mb-2">⚠ Issues</p>
+                        <p className="mb-2 text-xs font-medium text-rose-800">Worth fixing</p>
                         <ul className="space-y-1.5">
                           {result.evaluation.issues.map((s, i) => (
-                            <li key={i} className="text-sm text-muted-foreground">• {s}</li>
+                            <li key={i} className="text-sm text-muted-foreground">
+                              {s}
+                            </li>
                           ))}
                         </ul>
                       </div>
@@ -717,14 +701,16 @@ export default function HomePage() {
             )}
 
             {activeTab === 'tests' && result.tests && (
-              <div className="animate-slide-up space-y-4">
-                <CodeBlock code={result.tests.test_code} language="csharp — xUnit tests" />
-                {result.tests.notes && (
-                  <div className="rounded-xl border border-border bg-card p-5">
-                    <p className="text-xs text-muted-foreground mb-2 uppercase tracking-wide">Coverage Notes</p>
-                    <p className="text-sm text-muted-foreground leading-relaxed whitespace-pre-wrap">{result.tests.notes}</p>
+              <div className="animate-fade-in space-y-4">
+                <CodeBlock code={result.tests.test_code} language="xUnit" />
+                {result.tests.notes ? (
+                  <div className="rounded-lg border border-border bg-card p-5 shadow-sm">
+                    <p className="mb-2 text-xs text-muted-foreground">Coverage notes</p>
+                    <p className="text-sm leading-relaxed text-muted-foreground whitespace-pre-wrap">
+                      {result.tests.notes}
+                    </p>
                   </div>
-                )}
+                ) : null}
               </div>
             )}
           </section>
