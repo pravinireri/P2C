@@ -1,6 +1,7 @@
 """
 Prompt templates and context utilities.
-Extended with deep PowerBuilder migration intelligence.
+Extended with deep PowerBuilder migration intelligence that encodes
+DataWindow semantics, SQLCA handling, and UI-driven patterns.
 """
 
 # Language-specific migration context for better LLM output
@@ -8,23 +9,43 @@ LANGUAGE_HINTS = {
     "powerbuilder": {
         "description": "PowerBuilder / PowerScript with DataWindow technology",
         "common_patterns": [
-            "DataWindow operations: Retrieve(), Update(), InsertRow(), DeleteRow()",
-            "DataStore (non-visual DataWindow equivalent)",
+            "DataWindow operations: Retrieve(), Update(), InsertRow(), DeleteRow(), "
+            "GetItemString(), GetItemNumber(), SetItem(), RowCount(), GetRow()",
+            "DataStore (non-visual DataWindow equivalent for batch processing)",
+            "Row states: New!, NewModified!, NotModified!, DataModified!",
+            "Buffers: Primary!, Delete!, Filter! — rows move between buffers",
             "Global and instance variables (g_, i_ prefixes)",
-            "Events: Clicked, Open, Close, Constructor, Destructor",
-            "Embedded SQL: CONNECT, SELECT, INSERT, UPDATE, DECLARE CURSOR",
+            "Events: Clicked!, Open, Close, Constructor, Destructor, ue_ custom events",
+            "Embedded SQL: SELECT INTO, INSERT, UPDATE, DELETE, DECLARE CURSOR, FETCH",
+            "SQLCA transaction object: SQLCode (0=ok, 100=not found, -1=error), "
+            "SQLErrText, SQLNRows",
+            "COMMIT USING SQLCA / ROLLBACK USING SQLCA for explicit transaction control",
             "PowerBuilder Foundation Classes (PFC) service architecture",
-            "Transaction objects (SQLCA) for database connectivity",
+            "MessageBox(title, message) for user-facing alerts",
+            "IsNull() function for null checking, Len() for string length",
             "PBNI (PowerBuilder Native Interface) for external DLL calls",
-            "Message object for inter-window communication",
+            "Message object for inter-window communication, OpenWithParm",
             "Application, Window, Menu, UserObject inheritance hierarchy",
+            "1-based row/column indexing in DataWindow operations",
         ],
         "migration_notes": (
-            "When migrating DataWindows, replace with Entity Framework Core or "
-            "Dapper with LINQ queries. Map SQLCA transactions to IDbConnection / "
-            "SqlConnection. PowerScript's string concatenation (+) maps to C# "
-            "interpolation. Replace messagebox() with structured logging or exceptions. "
-            "Map PFC services to .NET dependency injection."
+            "CRITICAL MIGRATION RULES:\n"
+            "1. DataWindow → IDataWindowAdapter<T> (NOT raw EF Core DbSet). "
+            "The adapter must maintain in-memory row buffers with row-level state "
+            "tracking. GetItemString → adapter.GetItem<string>(row, col). "
+            "Update() only persists changed rows.\n"
+            "2. SQLCA → try/catch with IDbConnection. "
+            "SQLCode 0 = success, 100 = not found (check result.Any()), -1 = DbException. "
+            "Preserve exact return codes (-1 for error, etc.).\n"
+            "3. MessageBox() → INotificationService.ShowInfoAsync() or .ShowErrorAsync(). "
+            "Preserve exact title + message strings. Do NOT use Console.WriteLine.\n"
+            "4. COMMIT/ROLLBACK → explicit transaction.CommitAsync()/RollbackAsync() "
+            "at the SAME points as PB. Never auto-commit.\n"
+            "5. Events → async Task methods preserving sequential control flow.\n"
+            "6. PB's + string concatenation → C# string interpolation.\n"
+            "7. PB's IsNull(val) → val is null; Len(s) = 0 → string.IsNullOrEmpty(s).\n"
+            "8. PFC services → .NET dependency injection.\n"
+            "9. 1-based PB indexes: document any shift to 0-based in C#."
         ),
     },
     "cobol": {
@@ -74,11 +95,11 @@ def get_language_context(language: str) -> str:
     if not hints:
         return f"Source language: {language}. Apply general migration best practices."
 
-    patterns = "\n".join(f"  • {p}" for p in hints.get("common_patterns", []))
+    patterns = "\n".join(f"  - {p}" for p in hints.get("common_patterns", []))
     notes = hints.get("migration_notes", "")
 
     return (
         f"Language: {hints.get('description', language)}\n\n"
         f"Key constructs to recognise:\n{patterns}\n\n"
-        f"Migration strategy: {notes}"
+        f"Migration strategy:\n{notes}"
     )

@@ -36,7 +36,23 @@ In your explanation, focus on:
 - Business purpose (what problem does this code solve?)
 - Data flow and transformations
 - External dependencies (DB, UI, external systems)
-- Any obvious anti-patterns or technical debt"""
+- Any obvious anti-patterns or technical debt
+
+For PowerBuilder code, additionally identify:
+- DataWindow operations (GetItemString, Retrieve, Update, InsertRow, DeleteRow)
+  and their impact on migration (need DataWindow adapter, not raw DB calls)
+- SQLCA error handling patterns (SQLCode checks: 0, 100, -1)
+- MessageBox calls and the conditions under which they fire
+- Transaction boundaries (COMMIT/ROLLBACK USING SQLCA)
+- Row-level operations and current-row dependencies (GetRow)
+- Null/empty handling patterns (IsNull, Len, IsValid)
+- PFC service usage if present
+
+In key_components, list specific PB constructs found, e.g.:
+  "DataWindow: dw_employees (GetItemString, GetRow)",
+  "SQLCA: error handling with SQLCode branching",
+  "Transaction: COMMIT/ROLLBACK after Update()",
+  "MessageBox: 3 user-facing messages (2 error, 1 info)" """
 
     def _parse(self, raw: str) -> dict:
         try:

@@ -42,49 +42,75 @@ const SAMPLES: { label: string; language: string; code: string }[] = [
   {
     label: 'PB click handler',
     language: 'powerbuilder',
-    code: `// PB event handler - dw_employees click
+    code: `// PB event handler - dw_employees clicked!
+long ll_row
 string ls_name
-ls_name = dw_employees.GetItemString(1, "emp_name")
-if IsNull(ls_name) or len(ls_name) = 0 then
-    MessageBox("Error", "No employees found.")
+
+ll_row = dw_employees.GetRow()
+if ll_row <= 0 then
+    MessageBox("Warning", "No row is currently selected.")
+    return
+end if
+
+ls_name = dw_employees.GetItemString(ll_row, "emp_name")
+if IsNull(ls_name) or Len(ls_name) = 0 then
+    MessageBox("Error", "Employee name is empty or null.")
 else
-    MessageBox("First Employee", ls_name)
+    MessageBox("Employee Selected", ls_name)
 end if`,
   },
   {
     label: 'PB query function',
     language: 'powerbuilder',
-    code: `function long f_get_salary(long al_emp_id) returns decimal
+    code: `function long f_get_salary (long al_emp_id) returns decimal
   decimal ldc_salary
-  
+
   SELECT emp_salary
-  INTO :ldc_salary
-  FROM employees
-  WHERE emp_id = :al_emp_id
-  USING SQLCA;
-  
-  if SQLCA.SQLCode <> 0 then
-    MessageBox("DB Error", SQLCA.SQLErrText)
-    return -1
-  end if
-  
-  return ldc_salary
+    INTO :ldc_salary
+    FROM employees
+   WHERE emp_id = :al_emp_id
+   USING SQLCA;
+
+  CHOOSE CASE SQLCA.SQLCode
+    CASE 0
+      // Success — return the salary
+      return ldc_salary
+    CASE 100
+      // No rows found for this employee
+      MessageBox("Not Found", "No salary record for employee " + String(al_emp_id) + ".")
+      return -1
+    CASE ELSE
+      // Database error
+      MessageBox("DB Error", SQLCA.SQLErrText)
+      return -1
+  END CHOOSE
 end function`,
   },
   {
-    label: 'PB save',
+    label: 'PB save event',
     language: 'powerbuilder',
     code: `event ue_save()
   int li_rtn
-  
+  long ll_rows_modified
+
+  if dw_orders.ModifiedCount() + dw_orders.DeletedCount() = 0 then
+    MessageBox("Info", "No changes to save.")
+    return
+  end if
+
   li_rtn = dw_orders.Update()
-  
+
   if li_rtn = 1 then
     COMMIT USING SQLCA;
-    MessageBox("Success", "Order saved successfully.")
+    if SQLCA.SQLCode <> 0 then
+      ROLLBACK USING SQLCA;
+      MessageBox("Error", "Commit failed: " + SQLCA.SQLErrText)
+    else
+      MessageBox("Success", "Order saved successfully.")
+    end if
   else
     ROLLBACK USING SQLCA;
-    MessageBox("Error", "Save failed. Changes rolled back.")
+    MessageBox("Error", "Save failed. Changes have been rolled back.")
   end if
 end event`,
   },
@@ -122,6 +148,27 @@ async function readErrorMessage(res: Response): Promise<string> {
     /* use raw text */
   }
   return text.trim() || `Something went wrong (${res.status})`
+}
+
+/**
+ * Normalise code strings returned by the LLM.
+ *
+ * The translator returns C# inside a JSON `"translated_code"` field.
+ * Occasionally the model double-escapes newlines (literal `\\n` instead
+ * of real `\n`), or uses `\\r\\n`.  After JSON.parse those survive as
+ * the two-char sequences `\n` / `\r\n` in the JS string — which `<pre>`
+ * renders as visible text, not line breaks.
+ *
+ * This helper converts any remaining literal escape sequences into real
+ * whitespace characters so the `<pre>` block displays properly.
+ */
+function normalizeCode(raw: string): string {
+  return raw
+    .replace(/\\r\\n/g, '\n')  // literal \r\n  → real newline
+    .replace(/\\n/g, '\n')      // literal \n    → real newline
+    .replace(/\\t/g, '\t')      // literal \t    → real tab
+    .replace(/\t/g, '    ')      // tabs → 4 spaces for consistent indent
+    .trimEnd()
 }
 
 function clampScore(n: number): number {
@@ -306,7 +353,7 @@ function CodeBlock({ code, language = '' }: { code: string; language?: string })
         <span className="font-mono text-xs text-muted-foreground">{language || 'code'}</span>
         <CopyButton text={code} />
       </div>
-      <pre className="code-editor overflow-x-auto p-4 text-[13px] leading-relaxed">{code}</pre>
+      <pre className="code-editor overflow-x-auto p-4 text-[13px] leading-relaxed" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{code}</pre>
     </div>
   )
 }
@@ -392,12 +439,12 @@ export default function HomePage() {
             : [],
         },
         translation: {
-          translated_code: typeof json.translated_code === 'string' ? json.translated_code : '',
+          translated_code: normalizeCode(typeof json.translated_code === 'string' ? json.translated_code : ''),
           notes: typeof json.translation_notes === 'string' ? json.translation_notes : '',
         },
         evaluation,
         tests: {
-          test_code: typeof json.test_cases === 'string' ? json.test_cases : '',
+          test_code: normalizeCode(typeof json.test_cases === 'string' ? json.test_cases : ''),
           notes: typeof json.test_notes === 'string' ? json.test_notes : '',
         },
       })
