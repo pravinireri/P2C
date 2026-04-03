@@ -37,11 +37,17 @@ Translation rules:
 3. Add XML doc comments (///) to every public type and member
 4. Replace DataWindow → Entity Framework Core DbSet with a clear TODO comment
 5. Replace SQLCA/Embedded SQL → IDbConnection with parameterised queries
-6. Replace messagebox() → structured exception throwing with descriptive messages
+6. Replace messagebox() → INotificationService calls for the PowerPlan UI layer:
+   - Constructor-inject: private readonly INotificationService _notificationService;
+   - Info messages: await _notificationService.ShowInfoAsync("message");
+   - Error messages: await _notificationService.ShowErrorAsync("message");
+   - DO NOT use Console.WriteLine or MessageBox.Show
 7. Use nullable reference types (?) appropriately
 8. Namespace: use `LegacyMigrated.<ModuleName>` convention
 9. In the notes field, list: (a) assumptions made, (b) TODOs needing human review,
-   (c) any external dependencies that need wiring up"""
+   (c) any external dependencies that need wiring up
+10. Note which PowerBuilder constructs were mapped to which C# equivalents (e.g.,
+    DataWindow → EF Core DbSet, MessageBox → INotificationService, SQLCA → IDbConnection)"""
 
     def _parse(self, raw: str) -> dict:
         try:

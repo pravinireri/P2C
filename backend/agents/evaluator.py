@@ -45,10 +45,15 @@ Respond ONLY with valid JSON — no markdown, no extra text — using this exact
 Scoring guidance:
 - faithfulness_score: Are ALL business rules, data transformations, and side effects correctly captured?
   90-100 = perfect preservation; 70-89 = minor omissions; <70 = logic gaps present
+  Key checks for PowerBuilder: DataWindow operations (GetItemString, Retrieve, Update),
+  null/empty checks (IsNull), MessageBox calls preserved as INotificationService
 - idiomaticity_score: Does the C# feel like it was written by a senior .NET engineer?
   90-100 = idiomatic .NET 8; 70-89 = functional but not idiomatic; <70 = direct transliteration
+  Key checks: Uses async/await, DI (INotificationService, IDbConnection), LINQ, nullable refs
 - risk_level: Overall deployment risk considering both scores and code complexity
-"""
+  Low = safe to deploy with minimal review
+  Medium = needs manual review of specific areas (flag which ones)
+  High = logic gaps or missing error handling detected"""
 
     async def evaluate(
         self,
