@@ -1,12 +1,15 @@
 """
 LLM Service - Handles all OpenAI API interactions.
 Tracks token usage and estimated cost per call.
+
+Uses the modern OpenAI Responses API (client.responses.create with input=).
 """
 
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+import traceback
+from dataclasses import dataclass
 from typing import Final
 
 from openai import AsyncOpenAI
@@ -41,7 +44,7 @@ class UsageStats:
 
 
 class LLMService:
-    """Service for interacting with the OpenAI Chat API."""
+    """Service for interacting with the OpenAI Responses API."""
 
     def __init__(self) -> None:
         api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
@@ -49,7 +52,7 @@ class LLMService:
             raise RuntimeError("OPENAI_API_KEY is not set in backend/.env")
 
         self.client = AsyncOpenAI(api_key=api_key)
-        self.model = (os.getenv("OPENAI_MODEL") or "gpt-4o-mini").strip()
+        self.model = (os.getenv("OPENAI_MODEL") or DEFAULT_MODEL).strip()
 
     def _estimate_cost(self, prompt_tokens: int, completion_tokens: int) -> float:
         rates = COST_PER_1K.get(self.model, {"input": 0.005, "output": 0.015})
@@ -76,28 +79,34 @@ class LLMService:
         temperature: float = 0.3,
     ) -> tuple[str, UsageStats]:
         """
-        Send a completion request and return (text, UsageStats).
+        Send a completion request via the Responses API and return (text, UsageStats).
         All agents should call this to surface cost data.
         """
-        response = await self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=temperature,
-        )
+        try:
+            response = await self.client.responses.create(
+                model=self.model,
+                instructions=system_prompt,
+                input=user_prompt,
+                temperature=temperature,
+            )
+        except Exception as exc:
+            # Print the REAL error to server logs so it's never masked
+            print(f"[LLMService] OpenAI API call failed:\n{exc}")
+            traceback.print_exc()
+            raise
 
-        text = response.choices[0].message.content or ""
+        # Responses API: output_text is the top-level text accessor
+        text = response.output_text or ""
+
+        # Responses API usage fields: input_tokens / output_tokens
         usage = response.usage
+        input_tokens = usage.input_tokens if usage else 0
+        output_tokens = usage.output_tokens if usage else 0
 
         stats = UsageStats(
-            prompt_tokens=usage.prompt_tokens if usage else 0,
-            completion_tokens=usage.completion_tokens if usage else 0,
-            total_tokens=usage.total_tokens if usage else 0,
-            estimated_cost_usd=self._estimate_cost(
-                usage.prompt_tokens if usage else 0,
-                usage.completion_tokens if usage else 0,
-            ),
+            prompt_tokens=input_tokens,
+            completion_tokens=output_tokens,
+            total_tokens=input_tokens + output_tokens,
+            estimated_cost_usd=self._estimate_cost(input_tokens, output_tokens),
         )
         return text, stats

@@ -409,7 +409,13 @@ export default function HomePage() {
       setStage('done')
       setActiveTab('analysis')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error')
+      let msg = 'Unknown error'
+      if (err instanceof TypeError && /fetch|network/i.test(err.message)) {
+        msg = 'Could not reach the server. Make sure the backend (uvicorn) is running on port 8000.'
+      } else if (err instanceof Error) {
+        msg = err.message
+      }
+      setError(msg)
       setStage('error')
     }
   }
