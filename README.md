@@ -15,11 +15,14 @@ Also grades itself and writes tests.
 
 ---
 
-## quick start
+# quick start
 
-# backend
-pip install -r requirements.txt
+## backend
+pip install -r requirements.txt  
 py -m uvicorn backend.main:app --port 8000 --reload
-# frontend
-npm install
+
+## frontend
+npm install  
 npm run dev
+
+run both in separate terminals 👍
