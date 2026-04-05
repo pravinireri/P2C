@@ -1,11 +1,11 @@
 # P2C
 
-Turns old code like PowerBuilder into C#.  
-Also grades itself and writes tests.
+turns old code like PowerBuilder into C#.  
+also grades itself and writes tests.
 
 ---
 
-## What it does
+## what it does
 
 - reads legacy code  
 - explains it  
@@ -15,7 +15,7 @@ Also grades itself and writes tests.
 
 ---
 
-# quick start
+# instructions
 
 ## backend
 pip install -r requirements.txt  
