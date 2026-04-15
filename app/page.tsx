@@ -359,6 +359,14 @@ export default function HomePage() {
     setSourceLanguage(SAMPLES[idx].language)
   }, [])
 
+  async function handlePbFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const code = await file.text()
+    setLegacyCode(code)
+    setSourceLanguage('powerbuilder')
+  }
+
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     if (!legacyCode.trim()) return
@@ -501,9 +509,18 @@ export default function HomePage() {
           </div>
 
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-            <label htmlFor="legacy-code-input" className="text-sm font-medium text-foreground">
-              Your code
-            </label>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <label htmlFor="legacy-code-input" className="text-sm font-medium text-foreground">
+                Your code
+              </label>
+              <input
+                type="file"
+                accept=".pb"
+                onChange={handlePbFileChange}
+                disabled={isRunning}
+                className="block text-xs text-muted-foreground file:mr-3 file:rounded-md file:border file:border-border file:bg-background file:px-3 file:py-1.5 file:text-xs file:text-foreground disabled:opacity-60"
+              />
+            </div>
             <div className="overflow-hidden rounded-lg border border-border bg-card">
               <div className="border-b border-border px-3 py-2">
                 <span className="font-mono text-xs text-muted-foreground">{sourceLanguage}</span>
