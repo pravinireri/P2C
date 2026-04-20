@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Annotated
+
 from pydantic import BaseModel, Field
 
 class AnalyzeRequest(BaseModel):
@@ -65,3 +67,17 @@ class ModernizeResponse(BaseModel):
     test_notes: str
     evaluation: EvaluationResult
     usage: UsageStats
+
+
+class MigrateBatchItemRequest(BaseModel):
+    filename: str = Field(default="upload.pb", max_length=512, description="Client label for this upload")
+    code: str = Field(..., description="Legacy source for this item")
+    source_language: str = Field(default="powerbuilder", description="Source language")
+    target_language: str = Field(default="csharp", description="Target language")
+
+
+class MigrateBatchRequest(BaseModel):
+    items: Annotated[
+        list[MigrateBatchItemRequest],
+        Field(min_length=1, max_length=10, description="Up to 10 files to migrate in order"),
+    ]

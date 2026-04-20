@@ -106,3 +106,49 @@ def test_modernize_returns_key_components(mock_tests, mock_eval, mock_trans, moc
 def test_modernize_rejects_missing_code():
     response = client.post("/modernize", json={"source_language": "powerbuilder"})
     assert response.status_code == 422
+
+
+@patch("backend.main.analyzer")
+@patch("backend.main.translator")
+@patch("backend.main.evaluator")
+@patch("backend.main.test_generator")
+def test_migrate_batch_returns_three_results(mock_tests, mock_eval, mock_trans, mock_analyzer):
+    mock_analyzer.analyze_with_usage = AsyncMock(return_value=(DUMMY_ANALYSIS, DUMMY_USAGE))
+    mock_trans.translate_with_usage = AsyncMock(return_value=(DUMMY_TRANSLATION, DUMMY_USAGE))
+    mock_eval.evaluate = AsyncMock(return_value=(DUMMY_EVALUATION, DUMMY_USAGE))
+    mock_tests.generate_with_usage = AsyncMock(return_value=(DUMMY_TESTS, DUMMY_USAGE))
+
+    response = client.post(
+        "/migrate-batch",
+        json={
+            "items": [
+                {"filename": "file1.pb", "code": "event a()\nend event"},
+                {"filename": "file2.pb", "code": "event b()\nend event"},
+                {"filename": "file3.pbl", "code": "event c()\nend event"},
+            ]
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert "results" in data
+    assert len(data["results"]) == 3
+    names = [r["filename"] for r in data["results"]]
+    assert names == ["file1.pb", "file2.pb", "file3.pbl"]
+    for r in data["results"]:
+        assert "error" not in r
+        assert "translated_code" in r
+        assert r["evaluation"]["faithfulness_score"] >= 0
+
+
+def test_migrate_batch_rejects_empty_items():
+    response = client.post("/migrate-batch", json={"items": []})
+    assert response.status_code == 422
+
+
+def test_migrate_batch_rejects_more_than_ten():
+    response = client.post(
+        "/migrate-batch",
+        json={"items": [{"filename": f"{i}.pb", "code": "x"} for i in range(11)]},
+    )
+    assert response.status_code == 422

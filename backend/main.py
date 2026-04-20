@@ -21,6 +21,7 @@ from .services.llm_service import LLMService, UsageStats as _UsageStats
 from .models.schemas import (
     ModernizeRequest,
     ModernizeResponse,
+    MigrateBatchRequest,
     AnalyzeRequest,
     AnalyzeResponse,
     TranslateRequest,
@@ -92,54 +93,105 @@ async def generate_tests(request: TestGenerateRequest) -> TestGenerateResponse:
     result = await test_generator.generate(request.code, request.language)
     return TestGenerateResponse(**result)
 
+async def _modernize_core(request: ModernizeRequest) -> ModernizeResponse:
+    (analysis, analysis_usage), (translation, translation_usage) = await asyncio.gather(
+        analyzer.analyze_with_usage(request.code, request.source_language),
+        translator.translate_with_usage(
+            request.code, request.source_language, request.target_language
+        ),
+    )
+
+    translated_code = translation["translated_code"]
+
+    (eval_result, eval_usage), (tests, tests_usage) = await asyncio.gather(
+        evaluator.evaluate(request.code, translated_code, request.source_language),
+        test_generator.generate_with_usage(translated_code, request.target_language),
+    )
+
+    total_usage = _aggregate_usage(analysis_usage, translation_usage, eval_usage, tests_usage)
+
+    return ModernizeResponse(
+        original_code=request.code,
+        analysis=analysis.get("explanation", ""),
+        complexity=analysis.get("complexity", "unknown"),
+        key_components=analysis.get("key_components", []),
+        translated_code=translated_code,
+        translation_notes=translation.get("notes", ""),
+        test_cases=tests.get("test_code", ""),
+        test_notes=tests.get("notes", ""),
+        evaluation=EvaluationResult(**eval_result),
+        usage=total_usage,
+    )
+
+
+def _openai_http_detail(exc: Exception) -> tuple[int, str]:
+    import openai as _openai
+
+    if isinstance(exc, _openai.RateLimitError):
+        return (
+            429,
+            "OpenAI rate limit exceeded. Your account has hit its usage quota. "
+            "Check https://platform.openai.com/usage or wait a moment and retry.",
+        )
+    if isinstance(exc, _openai.AuthenticationError):
+        return (401, "Invalid OpenAI API key. Check OPENAI_API_KEY in backend/.env.")
+    if isinstance(exc, _openai.APIError):
+        return (502, f"OpenAI API error: {exc}")
+    return (500, str(exc))
+
+
 @app.post("/modernize", response_model=ModernizeResponse)
 async def modernize_code(request: ModernizeRequest) -> ModernizeResponse:
     import openai as _openai
+
     try:
-        (analysis, analysis_usage), (translation, translation_usage) = await asyncio.gather(
-            analyzer.analyze_with_usage(request.code, request.source_language),
-            translator.translate_with_usage(
-                request.code, request.source_language, request.target_language
-            ),
-        )
-
-        translated_code = translation["translated_code"]
-
-        (eval_result, eval_usage), (tests, tests_usage) = await asyncio.gather(
-            evaluator.evaluate(request.code, translated_code, request.source_language),
-            test_generator.generate_with_usage(translated_code, request.target_language),
-        )
-
-        total_usage = _aggregate_usage(analysis_usage, translation_usage, eval_usage, tests_usage)
-
-        return ModernizeResponse(
-            original_code=request.code,
-            analysis=analysis.get("explanation", ""),
-            complexity=analysis.get("complexity", "unknown"),
-            key_components=analysis.get("key_components", []),
-            translated_code=translated_code,
-            translation_notes=translation.get("notes", ""),
-            test_cases=tests.get("test_code", ""),
-            test_notes=tests.get("notes", ""),
-            evaluation=EvaluationResult(**eval_result),
-            usage=total_usage,
-        )
-
-    except _openai.RateLimitError:
-        raise fastapi.HTTPException(
-            status_code=429,
-            detail="OpenAI rate limit exceeded. Your account has hit its usage quota. "
-                   "Check https://platform.openai.com/usage or wait a moment and retry.",
-        )
-    except _openai.AuthenticationError:
-        raise fastapi.HTTPException(
-            status_code=401,
-            detail="Invalid OpenAI API key. Check OPENAI_API_KEY in backend/.env.",
-        )
+        return await _modernize_core(request)
+    except _openai.RateLimitError as exc:
+        status, detail = _openai_http_detail(exc)
+        raise fastapi.HTTPException(status_code=status, detail=detail)
+    except _openai.AuthenticationError as exc:
+        status, detail = _openai_http_detail(exc)
+        raise fastapi.HTTPException(status_code=status, detail=detail)
     except _openai.APIError as exc:
-        raise fastapi.HTTPException(status_code=502, detail=f"OpenAI API error: {exc}")
+        status, detail = _openai_http_detail(exc)
+        raise fastapi.HTTPException(status_code=status, detail=detail)
     except Exception as exc:
         raise fastapi.HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/migrate-batch")
+async def migrate_batch(request: MigrateBatchRequest) -> dict[str, list[dict]]:
+    """Run the same pipeline as /modernize for each item; failures become per-item errors."""
+    import openai as _openai
+
+    results: list[dict] = []
+    for item in request.items:
+        if not item.code.strip():
+            results.append({"filename": item.filename, "error": "Empty code"})
+            continue
+        inner = ModernizeRequest(
+            code=item.code,
+            source_language=item.source_language,
+            target_language=item.target_language,
+        )
+        try:
+            resp = await _modernize_core(inner)
+            row = resp.model_dump()
+            row["filename"] = item.filename
+            results.append(row)
+        except _openai.RateLimitError as exc:
+            status, detail = _openai_http_detail(exc)
+            results.append({"filename": item.filename, "error": detail, "error_status": status})
+        except _openai.AuthenticationError as exc:
+            status, detail = _openai_http_detail(exc)
+            results.append({"filename": item.filename, "error": detail, "error_status": status})
+        except _openai.APIError as exc:
+            status, detail = _openai_http_detail(exc)
+            results.append({"filename": item.filename, "error": detail, "error_status": status})
+        except Exception as exc:
+            results.append({"filename": item.filename, "error": str(exc), "error_status": 500})
+
+    return {"results": results}
 
 async def _stream_pipeline(request: ModernizeRequest) -> AsyncIterator[str]:
     def _sse(event: str, data: dict) -> str:
