@@ -38,6 +38,17 @@ type PipelineResult = {
 
 type ActiveTab = 'analysis' | 'translation' | 'evaluation' | 'tests'
 
+type BatchQueueItem = { filename: string; code: string }
+
+type BatchRow = {
+  id: string
+  filename: string
+  stage: Stage
+  error?: string
+  result: PipelineResult | null
+  originalCode: string
+}
+
 const SAMPLES: { label: string; language: string; code: string }[] = [
   {
     label: 'PB click handler',
@@ -126,6 +137,12 @@ function modernizeUrl(): string {
   return '/api/modernize'
 }
 
+function migrateBatchUrl(): string {
+  const direct = process.env.NEXT_PUBLIC_API_BASE_URL?.trim()
+  if (direct) return `${direct.replace(/\/$/, '')}/migrate-batch`
+  return '/api/migrate-batch'
+}
+
 async function readErrorMessage(res: Response): Promise<string> {
   const text = await res.text()
   try {
@@ -172,6 +189,32 @@ function normalizeEvaluation(raw: unknown): Evaluation | null {
       : [],
     issues: Array.isArray(e.issues) ? e.issues.filter((x): x is string => typeof x === 'string') : [],
     reviewer_note: typeof e.reviewer_note === 'string' ? e.reviewer_note : '',
+  }
+}
+
+function parseModernizePayload(json: Record<string, unknown>): PipelineResult {
+  const evaluation = normalizeEvaluation(json.evaluation)
+  if (!evaluation) {
+    throw new Error('The response did not include a usable evaluation block.')
+  }
+  const keyComponents = json.key_components
+  return {
+    analysis: {
+      explanation: typeof json.analysis === 'string' ? json.analysis : '',
+      complexity: typeof json.complexity === 'string' ? json.complexity : 'unknown',
+      key_components: Array.isArray(keyComponents)
+        ? keyComponents.filter((x): x is string => typeof x === 'string')
+        : [],
+    },
+    translation: {
+      translated_code: normalizeCode(typeof json.translated_code === 'string' ? json.translated_code : ''),
+      notes: typeof json.translation_notes === 'string' ? json.translation_notes : '',
+    },
+    evaluation,
+    tests: {
+      test_code: normalizeCode(typeof json.test_cases === 'string' ? json.test_cases : ''),
+      notes: typeof json.test_notes === 'string' ? json.test_notes : '',
+    },
   }
 }
 
@@ -341,6 +384,184 @@ function CodeBlock({ code, language = '' }: { code: string; language?: string })
   )
 }
 
+function PipelineResultSection({ result }: { result: PipelineResult }) {
+  const [activeTab, setActiveTab] = useState<ActiveTab>('analysis')
+
+  if (!result.analysis) {
+    return null
+  }
+
+  return (
+    <section className="space-y-4">
+      <div className="flex flex-wrap gap-1 border-b border-border pb-2">
+        {(
+          [
+            { key: 'analysis' as const, label: 'Analysis' },
+            { key: 'translation' as const, label: 'C#' },
+            { key: 'evaluation' as const, label: 'Review' },
+            { key: 'tests' as const, label: 'Tests' },
+          ] as const
+        ).map((tab) => (
+          <TabButton
+            key={tab.key}
+            active={activeTab === tab.key}
+            onClick={() => setActiveTab(tab.key)}
+            disabled={false}
+          >
+            {tab.label}
+          </TabButton>
+        ))}
+      </div>
+
+      {activeTab === 'analysis' && result.analysis && (
+        <div className="space-y-4">
+          <div className="rounded-lg border border-border bg-card p-5">
+            <div className="mb-2 flex flex-wrap items-baseline gap-2">
+              <span className="text-xs text-muted-foreground">Complexity</span>
+              <span className="text-sm font-medium capitalize text-foreground">{result.analysis.complexity}</span>
+            </div>
+            <p className="text-[15px] leading-relaxed text-foreground">{result.analysis.explanation}</p>
+            {result.analysis.key_components.length > 0 && (
+              <div className="mt-4">
+                <p className="mb-2 text-xs text-muted-foreground">Key components</p>
+                <div className="flex flex-wrap gap-2">
+                  {result.analysis.key_components.map((c, i) => (
+                    <span
+                      key={i}
+                      className="rounded-md border border-border bg-muted/50 px-2 py-1 text-xs text-foreground"
+                    >
+                      {c}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'translation' && result.translation && (
+        <div className="space-y-4">
+          <CodeBlock code={result.translation.translated_code} language="csharp" />
+          {result.translation.notes ? (
+            <div className="rounded-lg border border-border bg-card p-5">
+              <p className="mb-2 text-xs font-medium text-muted-foreground">Migration Notes</p>
+              <p className="text-sm leading-relaxed text-muted-foreground whitespace-pre-wrap">
+                {result.translation.notes}
+              </p>
+            </div>
+          ) : null}
+        </div>
+      )}
+
+      {activeTab === 'evaluation' && result.evaluation && (
+        <div className="space-y-4">
+          <div className="rounded-lg border border-border bg-card p-5">
+            <div className="mb-4 grid gap-4 sm:grid-cols-2">
+              <ScoreBar label="Faithfulness" score={result.evaluation.faithfulness_score} />
+              <ScoreBar label="Idiomaticity" score={result.evaluation.idiomaticity_score} />
+            </div>
+            <span
+              className={`inline-block rounded-full border px-2 py-1 text-xs font-medium ${riskClass(result.evaluation.risk_level)}`}
+            >
+              {result.evaluation.risk_level} risk
+            </span>
+
+            <div className="mt-3 rounded-md border border-border bg-muted/30 px-3 py-2">
+              <p className="text-xs font-medium text-muted-foreground mb-1">How scores are calculated</p>
+              <ul className="space-y-0.5 text-xs text-muted-foreground">
+                <li>
+                  <span className="font-medium text-foreground">Faithfulness (0-100):</span> Does the C# preserve ALL
+                  PB business rules, DataWindow ops, and side effects?
+                </li>
+                <li>
+                  <span className="font-medium text-foreground">Idiomaticity (0-100):</span> Does the C# feel like it
+                  was written by a senior .NET 8 engineer? (async/await, LINQ, DI)
+                </li>
+                <li>
+                  <span className="font-medium text-foreground">Risk:</span> Low = safe to deploy, Medium = needs
+                  review, High = logic gaps detected
+                </li>
+              </ul>
+            </div>
+
+            <div className="mt-4">
+              <p className="mb-2 text-xs text-muted-foreground">Reviewer Summary</p>
+              <p className="text-[15px] leading-relaxed text-foreground">{result.evaluation.reviewer_note}</p>
+            </div>
+            <div className="mt-6 grid gap-6 sm:grid-cols-2">
+              {result.evaluation.strengths.length > 0 && (
+                <div>
+                  <p className="mb-2 text-xs font-medium text-foreground">Strengths</p>
+                  <ul className="space-y-1.5">
+                    {result.evaluation.strengths.map((s, i) => (
+                      <li key={i} className="text-sm text-muted-foreground">
+                        {s}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {result.evaluation.issues.length > 0 && (
+                <div>
+                  <p className="mb-2 text-xs font-medium text-foreground">Issues</p>
+                  <ul className="space-y-1.5">
+                    {result.evaluation.issues.map((s, i) => (
+                      <li key={i} className="text-sm text-muted-foreground">
+                        {s}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'tests' && result.tests && (
+        <div className="space-y-4">
+          <CodeBlock code={result.tests.test_code} language="xUnit" />
+          {result.tests.notes ? (
+            <div className="rounded-lg border border-border bg-card p-5">
+              <p className="mb-2 text-xs text-muted-foreground">Coverage notes</p>
+              <p className="text-sm leading-relaxed text-muted-foreground whitespace-pre-wrap">{result.tests.notes}</p>
+            </div>
+          ) : null}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function BatchFileProgress({ stage, hasResult }: { stage: Stage; hasResult: boolean }) {
+  const activeStageIdx = STAGES.findIndex((s) => s.key === stage)
+  return (
+    <ul className="mt-2 space-y-2 border-t border-border pt-3">
+      {STAGES.map((s, i) => {
+        const isActive = s.key === stage
+        const isDone = hasResult || activeStageIdx > i
+        const { icon, colorClass } = progressIcon(s.key, isDone, isActive)
+        return (
+          <li key={s.key} className="flex items-center gap-2">
+            <span
+              className={`
+                flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-[10px] font-medium
+                ${colorClass}
+              `}
+            >
+              {isDone ? icon : isActive ? icon : i + 1}
+            </span>
+            <span className={`text-xs ${isActive ? 'font-medium text-foreground' : 'text-muted-foreground'}`}>
+              {s.label}
+            </span>
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
+
 export default function HomePage() {
   const [legacyCode, setLegacyCode] = useState(SAMPLES[0].code)
   const [sourceLanguage, setSourceLanguage] = useState(SAMPLES[0].language)
@@ -352,19 +573,134 @@ export default function HomePage() {
     evaluation: null,
     tests: null,
   })
-  const [activeTab, setActiveTab] = useState<ActiveTab>('analysis')
+  const [batchQueue, setBatchQueue] = useState<BatchQueueItem[]>([])
+  const [batchRows, setBatchRows] = useState<BatchRow[]>([])
+  const [isBatchRunning, setIsBatchRunning] = useState(false)
 
   const handleSampleSelect = useCallback((idx: number) => {
     setLegacyCode(SAMPLES[idx].code)
     setSourceLanguage(SAMPLES[idx].language)
   }, [])
 
-  async function handlePbFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file) return
-    const code = await file.text()
-    setLegacyCode(code)
-    setSourceLanguage('powerbuilder')
+  async function handlePbFilesChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = e.target.files
+    if (!files?.length) return
+    const picked = Array.from(files).slice(0, 10)
+    const allowed = picked.filter(
+      (f) => f.name.toLowerCase().endsWith('.pb') || f.name.toLowerCase().endsWith('.pbl'),
+    )
+    if (allowed.length === 0) {
+      e.target.value = ''
+      return
+    }
+    if (allowed.length === 1) {
+      const code = await allowed[0].text()
+      setLegacyCode(code)
+      setSourceLanguage('powerbuilder')
+      setBatchQueue([])
+    } else {
+      const items: BatchQueueItem[] = await Promise.all(
+        allowed.map(async (f) => ({ filename: f.name, code: await f.text() })),
+      )
+      setBatchQueue(items)
+    }
+    e.target.value = ''
+  }
+
+  async function handleBatchRun() {
+    if (batchQueue.length === 0) return
+
+    setError('')
+    setIsBatchRunning(true)
+    const rows: BatchRow[] = batchQueue.map((q, i) => ({
+      id: `batch-${Date.now()}-${i}`,
+      filename: q.filename,
+      stage: 'analyzing',
+      result: null,
+      originalCode: q.code,
+    }))
+    setBatchRows(rows)
+
+    const timers: ReturnType<typeof setTimeout>[] = []
+    batchQueue.forEach((_, i) => {
+      const skew = i * 400
+      timers.push(
+        setTimeout(() => {
+          setBatchRows((prev) => prev.map((r, j) => (j === i ? { ...r, stage: 'translating' } : r)))
+        }, 1200 + skew),
+      )
+      timers.push(
+        setTimeout(() => {
+          setBatchRows((prev) => prev.map((r, j) => (j === i ? { ...r, stage: 'evaluating' } : r)))
+        }, 2400 + skew),
+      )
+      timers.push(
+        setTimeout(() => {
+          setBatchRows((prev) => prev.map((r, j) => (j === i ? { ...r, stage: 'testing' } : r)))
+        }, 3600 + skew),
+      )
+    })
+
+    try {
+      const res = await fetch(migrateBatchUrl(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items: batchQueue.map((q) => ({
+            filename: q.filename,
+            code: q.code,
+            source_language: 'powerbuilder',
+          })),
+        }),
+      })
+
+      timers.forEach(clearTimeout)
+
+      if (!res.ok) {
+        throw new Error(await readErrorMessage(res))
+      }
+
+      const data = (await res.json()) as { results?: Record<string, unknown>[] }
+      const results = data.results ?? []
+      setBatchRows((prev) =>
+        prev.map((row, i) => {
+          const r = results[i]
+          if (!r) {
+            return { ...row, stage: 'error', error: 'Missing server entry for this file.', result: null }
+          }
+          if (typeof r.error === 'string') {
+            return { ...row, stage: 'error', error: r.error, result: null }
+          }
+          try {
+            const parsed = parseModernizePayload(r)
+            return {
+              ...row,
+              stage: 'done',
+              error: undefined,
+              result: parsed,
+              originalCode: typeof r.original_code === 'string' ? r.original_code : row.originalCode,
+            }
+          } catch (e) {
+            const detail = e instanceof Error ? e.message : 'Invalid response'
+            return { ...row, stage: 'error', error: detail, result: null }
+          }
+        }),
+      )
+    } catch (err) {
+      timers.forEach(clearTimeout)
+      let msg = 'Unknown error'
+      if (err instanceof TypeError && /fetch|network/i.test(err.message)) {
+        msg = 'Could not reach the server. Make sure the backend (uvicorn) is running on port 8000.'
+      } else if (err instanceof Error) {
+        msg = err.message
+      }
+      setError(msg)
+      setBatchRows((prev) =>
+        prev.map((r) => ({ ...r, stage: 'error' as Stage, error: msg, result: null })),
+      )
+    } finally {
+      setIsBatchRunning(false)
+    }
   }
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
@@ -415,33 +751,9 @@ export default function HomePage() {
         throw new Error('The server returned something that is not valid JSON.')
       }
 
-      const evaluation = normalizeEvaluation(json.evaluation)
-      if (!evaluation) {
-        throw new Error('The response did not include a usable evaluation block.')
-      }
-
-      const keyComponents = json.key_components
-      setResult({
-        analysis: {
-          explanation: typeof json.analysis === 'string' ? json.analysis : '',
-          complexity: typeof json.complexity === 'string' ? json.complexity : 'unknown',
-          key_components: Array.isArray(keyComponents)
-            ? keyComponents.filter((x): x is string => typeof x === 'string')
-            : [],
-        },
-        translation: {
-          translated_code: normalizeCode(typeof json.translated_code === 'string' ? json.translated_code : ''),
-          notes: typeof json.translation_notes === 'string' ? json.translation_notes : '',
-        },
-        evaluation,
-        tests: {
-          test_code: normalizeCode(typeof json.test_cases === 'string' ? json.test_cases : ''),
-          notes: typeof json.test_notes === 'string' ? json.test_notes : '',
-        },
-      })
+      setResult(parseModernizePayload(json))
 
       setStage('done')
-      setActiveTab('analysis')
     } catch (err) {
       let msg = 'Unknown error'
       if (err instanceof TypeError && /fetch|network/i.test(err.message)) {
@@ -466,7 +778,8 @@ export default function HomePage() {
     URL.revokeObjectURL(url)
   }
 
-  const isRunning = stage !== 'idle' && stage !== 'done' && stage !== 'error'
+  const singleRunBusy = stage !== 'idle' && stage !== 'done' && stage !== 'error'
+  const isBlocked = singleRunBusy || isBatchRunning
   const hasResult = stage === 'done' && result.analysis !== null
   const activeStageIdx = STAGES.findIndex((s) => s.key === stage)
 
@@ -491,7 +804,7 @@ export default function HomePage() {
                   key={s.label}
                   type="button"
                   onClick={() => handleSampleSelect(i)}
-                  disabled={isRunning}
+                  disabled={isBlocked}
                   className={`
                     rounded-md border px-3 py-1.5 text-sm transition
                     disabled:pointer-events-none disabled:opacity-40
@@ -513,13 +826,28 @@ export default function HomePage() {
               <label htmlFor="legacy-code-input" className="text-sm font-medium text-foreground">
                 Your code
               </label>
-              <input
-                type="file"
-                accept=".pb"
-                onChange={handlePbFileChange}
-                disabled={isRunning}
-                className="block text-xs text-muted-foreground file:mr-3 file:rounded-md file:border file:border-border file:bg-background file:px-3 file:py-1.5 file:text-xs file:text-foreground disabled:opacity-60"
-              />
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <input
+                  type="file"
+                  multiple
+                  accept=".pb,.pbl"
+                  onChange={handlePbFilesChange}
+                  disabled={isBlocked}
+                  aria-label="Upload .pb or .pbl files, up to 10 at once. One file loads into the editor; several queue for Run batch."
+                  className="block text-xs text-muted-foreground file:mr-3 file:rounded-md file:border file:border-border file:bg-background file:px-3 file:py-1.5 file:text-xs file:text-foreground disabled:opacity-60"
+                />
+                <button
+                  type="button"
+                  onClick={handleBatchRun}
+                  disabled={isBlocked || batchQueue.length === 0}
+                  className="rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground transition hover:border-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isBatchRunning ? 'Batch…' : 'Run batch'}
+                </button>
+                {batchQueue.length > 0 ? (
+                  <span className="text-xs text-muted-foreground">{batchQueue.length} in queue</span>
+                ) : null}
+              </div>
             </div>
             <div className="overflow-hidden rounded-lg border border-border bg-card">
               <div className="border-b border-border px-3 py-2">
@@ -530,7 +858,7 @@ export default function HomePage() {
                 value={legacyCode}
                 onChange={(e) => setLegacyCode(e.target.value)}
                 rows={16}
-                disabled={isRunning}
+                disabled={isBlocked}
                 className="code-editor code-surface w-full border-0 p-4 outline-none ring-0 disabled:opacity-60"
                 placeholder="Paste legacy code here."
                 spellCheck={false}
@@ -543,7 +871,7 @@ export default function HomePage() {
                 <select
                   value={sourceLanguage}
                   onChange={(e) => setSourceLanguage(e.target.value)}
-                  disabled={isRunning}
+                  disabled={isBlocked}
                   className="rounded-md border border-border bg-background px-3 py-2 text-sm outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <option value="powerbuilder">PowerBuilder</option>
@@ -554,11 +882,11 @@ export default function HomePage() {
 
               <button
                 type="submit"
-                disabled={isRunning || !legacyCode.trim()}
+                disabled={isBlocked || !legacyCode.trim()}
                 id="run-pipeline-btn"
                 className="rounded-md bg-foreground px-5 py-2 text-sm font-medium text-background transition hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {isRunning ? 'Working...' : 'Run'}
+                {singleRunBusy || isBatchRunning ? 'Working...' : 'Run'}
               </button>
 
               {hasResult && (
@@ -633,140 +961,41 @@ export default function HomePage() {
           </div>
         </div>
 
-        {hasResult && (
-          <section className="space-y-4">
-            <div className="flex flex-wrap gap-1 border-b border-border pb-2">
-              {(
-                [
-                  { key: 'analysis' as const, label: 'Analysis' },
-                  { key: 'translation' as const, label: 'C#' },
-                  { key: 'evaluation' as const, label: 'Review' },
-                  { key: 'tests' as const, label: 'Tests' },
-                ] as const
-              ).map((tab) => (
-                <TabButton
-                  key={tab.key}
-                  active={activeTab === tab.key}
-                  onClick={() => setActiveTab(tab.key)}
-                  disabled={false}
-                >
-                  {tab.label}
-                </TabButton>
-              ))}
-            </div>
+        {hasResult && <PipelineResultSection result={result} />}
 
-            {activeTab === 'analysis' && result.analysis && (
-              <div className="space-y-4">
-                <div className="rounded-lg border border-border bg-card p-5">
-                  <div className="mb-2 flex flex-wrap items-baseline gap-2">
-                    <span className="text-xs text-muted-foreground">Complexity</span>
-                    <span className="text-sm font-medium capitalize text-foreground">
-                      {result.analysis.complexity}
-                    </span>
-                  </div>
-                  <p className="text-[15px] leading-relaxed text-foreground">{result.analysis.explanation}</p>
-                  {result.analysis.key_components.length > 0 && (
-                    <div className="mt-4">
-                      <p className="mb-2 text-xs text-muted-foreground">Key components</p>
-                      <div className="flex flex-wrap gap-2">
-                        {result.analysis.key_components.map((c, i) => (
-                          <span
-                            key={i}
-                            className="rounded-md border border-border bg-muted/50 px-2 py-1 text-xs text-foreground"
-                          >
-                            {c}
-                          </span>
-                        ))}
+        {batchRows.length > 0 && (
+          <section className="space-y-3">
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Batch results</p>
+            <div className="space-y-2">
+              {batchRows.map((row) => {
+                const fileDone = row.stage === 'done' && row.result?.analysis
+                const fileErr = row.stage === 'error' || !!row.error
+                return (
+                  <details key={row.id} className="group rounded-lg border border-border bg-card open:shadow-sm">
+                    <summary className="cursor-pointer list-none px-4 py-3 marker:hidden [&::-webkit-details-marker]:hidden">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-sm font-medium text-foreground">{row.filename}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {fileErr ? 'Error' : fileDone ? 'Done' : isBatchRunning ? 'Working…' : row.stage}
+                        </span>
                       </div>
+                      <BatchFileProgress stage={row.stage} hasResult={!!fileDone} />
+                    </summary>
+                    <div className="border-t border-border px-4 pb-4 pt-1">
+                      {row.error ? (
+                        <div
+                          role="alert"
+                          className="mt-2 rounded-md border border-foreground/20 bg-muted px-3 py-2 text-sm text-foreground"
+                        >
+                          {row.error}
+                        </div>
+                      ) : null}
+                      {row.result?.analysis ? <PipelineResultSection result={row.result} /> : null}
                     </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {activeTab === 'translation' && result.translation && (
-              <div className="space-y-4">
-                <CodeBlock code={result.translation.translated_code} language="csharp" />
-                {result.translation.notes ? (
-                  <div className="rounded-lg border border-border bg-card p-5">
-                    <p className="mb-2 text-xs font-medium text-muted-foreground">Migration Notes</p>
-                    <p className="text-sm leading-relaxed text-muted-foreground whitespace-pre-wrap">
-                      {result.translation.notes}
-                    </p>
-                  </div>
-                ) : null}
-              </div>
-            )}
-
-            {activeTab === 'evaluation' && result.evaluation && (
-              <div className="space-y-4">
-                <div className="rounded-lg border border-border bg-card p-5">
-                  <div className="mb-4 grid gap-4 sm:grid-cols-2">
-                    <ScoreBar label="Faithfulness" score={result.evaluation.faithfulness_score} />
-                    <ScoreBar label="Idiomaticity" score={result.evaluation.idiomaticity_score} />
-                  </div>
-                  <span
-                    className={`inline-block rounded-full border px-2 py-1 text-xs font-medium ${riskClass(result.evaluation.risk_level)}`}
-                  >
-                    {result.evaluation.risk_level} risk
-                  </span>
-
-                  <div className="mt-3 rounded-md border border-border bg-muted/30 px-3 py-2">
-                    <p className="text-xs font-medium text-muted-foreground mb-1">How scores are calculated</p>
-                    <ul className="space-y-0.5 text-xs text-muted-foreground">
-                      <li><span className="font-medium text-foreground">Faithfulness (0-100):</span> Does the C# preserve ALL PB business rules, DataWindow ops, and side effects?</li>
-                      <li><span className="font-medium text-foreground">Idiomaticity (0-100):</span> Does the C# feel like it was written by a senior .NET 8 engineer? (async/await, LINQ, DI)</li>
-                      <li><span className="font-medium text-foreground">Risk:</span> Low = safe to deploy, Medium = needs review, High = logic gaps detected</li>
-                    </ul>
-                  </div>
-
-                  <div className="mt-4">
-                    <p className="mb-2 text-xs text-muted-foreground">Reviewer Summary</p>
-                    <p className="text-[15px] leading-relaxed text-foreground">{result.evaluation.reviewer_note}</p>
-                  </div>
-                  <div className="mt-6 grid gap-6 sm:grid-cols-2">
-                    {result.evaluation.strengths.length > 0 && (
-                      <div>
-                        <p className="mb-2 text-xs font-medium text-foreground">Strengths</p>
-                        <ul className="space-y-1.5">
-                          {result.evaluation.strengths.map((s, i) => (
-                            <li key={i} className="text-sm text-muted-foreground">
-                              {s}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                    {result.evaluation.issues.length > 0 && (
-                      <div>
-                        <p className="mb-2 text-xs font-medium text-foreground">Issues</p>
-                        <ul className="space-y-1.5">
-                          {result.evaluation.issues.map((s, i) => (
-                            <li key={i} className="text-sm text-muted-foreground">
-                              {s}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {activeTab === 'tests' && result.tests && (
-              <div className="space-y-4">
-                <CodeBlock code={result.tests.test_code} language="xUnit" />
-                {result.tests.notes ? (
-                  <div className="rounded-lg border border-border bg-card p-5">
-                    <p className="mb-2 text-xs text-muted-foreground">Coverage notes</p>
-                    <p className="text-sm leading-relaxed text-muted-foreground whitespace-pre-wrap">
-                      {result.tests.notes}
-                    </p>
-                  </div>
-                ) : null}
-              </div>
-            )}
+                  </details>
+                )
+              })}
+            </div>
           </section>
         )}
       </div>
