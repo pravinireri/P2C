@@ -961,15 +961,18 @@ export default function HomePage() {
                 Your code
               </label>
               <div className="flex flex-wrap items-center justify-end gap-2">
-                <input
-                  type="file"
-                  multiple
-                  accept=".pb,.pbl"
-                  onChange={handlePbFilesChange}
-                  disabled={isBlocked}
-                  aria-label="Upload .pb or .pbl files, up to 10 at once. One file loads into the editor; several queue for Run batch."
-                  className="block text-xs text-muted-foreground file:mr-3 file:rounded-md file:border file:border-border file:bg-background file:px-3 file:py-1.5 file:text-xs file:text-foreground disabled:opacity-60"
-                />
+                <label
+                  className="rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground transition hover:border-foreground hover:text-foreground"
+                >Upload<input
+                    type="file"
+                    multiple
+                    accept=".pb,.pbl"
+                    onChange={handlePbFilesChange}
+                    disabled={isBlocked}
+                    aria-label="Upload .pb or .pbl files, up to 10 at once. One file loads into the editor; several queue for Run batch."
+                    className="sr-only"
+                  />
+                </label>
                 <button
                   type="button"
                   onClick={handleBatchRun}
