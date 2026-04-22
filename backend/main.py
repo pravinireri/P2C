@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import uuid
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -22,6 +23,7 @@ from .models.schemas import (
     ModernizeRequest,
     ModernizeResponse,
     MigrateBatchRequest,
+    MigrateBatchItemRequest,
     AnalyzeRequest,
     AnalyzeResponse,
     TranslateRequest,
@@ -58,6 +60,8 @@ analyzer = AnalyzerAgent(llm_service)
 translator = TranslatorAgent(llm_service)
 test_generator = TestGeneratorAgent(llm_service)
 evaluator = EvaluatorAgent(llm_service)
+
+BATCH_RUNS: dict[str, list[MigrateBatchItemRequest]] = {}
 
 def _aggregate_usage(*stats: _UsageStats) -> UsageStats:
     total = _UsageStats()
@@ -192,6 +196,123 @@ async def migrate_batch(request: MigrateBatchRequest) -> dict[str, list[dict]]:
             results.append({"filename": item.filename, "error": str(exc), "error_status": 500})
 
     return {"results": results}
+
+
+@app.post("/migrate-batch/start")
+async def migrate_batch_start(request: MigrateBatchRequest) -> dict[str, str | int]:
+    run_id = str(uuid.uuid4())
+    BATCH_RUNS[run_id] = list(request.items)
+    return {"run_id": run_id, "file_count": len(request.items)}
+
+
+async def _stream_single_modernize(request: ModernizeRequest) -> AsyncIterator[str]:
+    """SSE stream for one file; ends with event `complete` carrying full ModernizeResponse JSON."""
+
+    def _sse(event: str, data: dict) -> str:
+        return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+    yield _sse(
+        "status",
+        {"stage": "analyzing", "message": "Analyzing legacy code…", "progress": 12},
+    )
+
+    try:
+        (analysis, analysis_usage), (translation, translation_usage) = await asyncio.gather(
+            analyzer.analyze_with_usage(request.code, request.source_language),
+            translator.translate_with_usage(
+                request.code, request.source_language, request.target_language
+            ),
+        )
+    except Exception as exc:
+        yield _sse("error", {"message": str(exc)})
+        return
+
+    yield _sse("analysis", {"data": analysis})
+    yield _sse(
+        "status",
+        {"stage": "translating", "message": "Translation complete.", "progress": 38},
+    )
+    yield _sse("translation", {"data": translation})
+    yield _sse(
+        "status",
+        {"stage": "evaluating", "message": "Evaluating translation quality…", "progress": 75},
+    )
+
+    translated_code = translation["translated_code"]
+
+    try:
+        (eval_result, eval_usage), (tests, tests_usage) = await asyncio.gather(
+            evaluator.evaluate(request.code, translated_code, request.source_language),
+            test_generator.generate_with_usage(translated_code, request.target_language),
+        )
+    except Exception as exc:
+        yield _sse("error", {"message": str(exc)})
+        return
+
+    yield _sse("evaluation", {"data": eval_result})
+    yield _sse(
+        "status",
+        {"stage": "testing", "message": "Test cases generated.", "progress": 88},
+    )
+    yield _sse("tests", {"data": tests})
+
+    total_usage = _aggregate_usage(
+        analysis_usage, translation_usage, eval_usage, tests_usage
+    )
+    response = ModernizeResponse(
+        original_code=request.code,
+        analysis=analysis.get("explanation", ""),
+        complexity=analysis.get("complexity", "unknown"),
+        key_components=analysis.get("key_components", []),
+        translated_code=translated_code,
+        translation_notes=translation.get("notes", ""),
+        test_cases=tests.get("test_code", ""),
+        test_notes=tests.get("notes", ""),
+        evaluation=EvaluationResult(**eval_result),
+        usage=total_usage,
+    )
+
+    yield _sse("complete", {"data": response.model_dump()})
+    yield _sse("done", {"message": "Pipeline complete.", "progress": 100})
+
+
+@app.get("/stream/{run_id}/{file_index}")
+async def stream_batch_item(run_id: str, file_index: int) -> StreamingResponse:
+    items = BATCH_RUNS.get(run_id)
+    if items is None:
+        raise fastapi.HTTPException(status_code=404, detail="Unknown run_id")
+    if file_index < 0 or file_index >= len(items):
+        raise fastapi.HTTPException(status_code=404, detail="Invalid file index")
+
+    item = items[file_index]
+    if not item.code.strip():
+
+        def empty_err():
+            yield f'event: error\ndata: {json.dumps({"message": "Empty code"})}\n\n'
+
+        return StreamingResponse(
+            empty_err(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    inner = ModernizeRequest(
+        code=item.code,
+        source_language=item.source_language,
+        target_language=item.target_language,
+    )
+    return StreamingResponse(
+        _stream_single_modernize(inner),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
 
 async def _stream_pipeline(request: ModernizeRequest) -> AsyncIterator[str]:
     def _sse(event: str, data: dict) -> str:

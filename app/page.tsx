@@ -1,6 +1,6 @@
 'use client'
 
-import { FormEvent, useCallback, useState } from 'react'
+import { FormEvent, useCallback, useRef, useState } from 'react'
 
 type Stage = 'idle' | 'analyzing' | 'translating' | 'evaluating' | 'testing' | 'done' | 'error'
 
@@ -44,6 +44,7 @@ type BatchRow = {
   id: string
   filename: string
   stage: Stage
+  progressPercent: number
   error?: string
   result: PipelineResult | null
   originalCode: string
@@ -137,10 +138,82 @@ function modernizeUrl(): string {
   return '/api/modernize'
 }
 
-function migrateBatchUrl(): string {
+function migrateBatchStartUrl(): string {
   const direct = process.env.NEXT_PUBLIC_API_BASE_URL?.trim()
-  if (direct) return `${direct.replace(/\/$/, '')}/migrate-batch`
-  return '/api/migrate-batch'
+  if (direct) return `${direct.replace(/\/$/, '')}/migrate-batch/start`
+  return '/api/migrate-batch/start'
+}
+
+function batchStreamUrl(runId: string, fileIndex: number): string {
+  const direct = process.env.NEXT_PUBLIC_API_BASE_URL?.trim()
+  if (direct) return `${direct.replace(/\/$/, '')}/stream/${encodeURIComponent(runId)}/${fileIndex}`
+  return `/api/stream/${encodeURIComponent(runId)}/${fileIndex}`
+}
+
+function stageToFallbackProgress(stage: Stage): number {
+  switch (stage) {
+    case 'analyzing':
+      return 15
+    case 'translating':
+      return 40
+    case 'evaluating':
+      return 75
+    case 'testing':
+      return 90
+    case 'done':
+      return 100
+    default:
+      return 0
+  }
+}
+
+function formatBatchRowStatus(row: BatchRow): string {
+  if (row.stage === 'error') return `${row.filename}: —`
+  if (row.stage === 'done') return `${row.filename}: 100% (Tests ✓)`
+  const labelByStage: Partial<Record<Stage, string>> = {
+    analyzing: 'Understand',
+    translating: 'Translate',
+    evaluating: 'Review',
+    testing: 'Tests',
+  }
+  const label = labelByStage[row.stage] ?? row.stage
+  return `${row.filename}: ${row.progressPercent}% (${label} ✓)`
+}
+
+async function readSseStream(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  onEvent: (eventName: string, data: unknown) => void,
+): Promise<void> {
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    let sep: number
+    while ((sep = buffer.indexOf('\n\n')) !== -1) {
+      const block = buffer.slice(0, sep)
+      buffer = buffer.slice(sep + 2)
+      let eventName = ''
+      const dataLines: string[] = []
+      for (const line of block.split('\n')) {
+        if (line.startsWith('event:')) {
+          eventName = line.slice(6).trim()
+        } else if (line.startsWith('data:')) {
+          dataLines.push(line.slice(5).trimStart())
+        }
+      }
+      const dataStr = dataLines.join('\n')
+      if (!dataStr) continue
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(dataStr)
+      } catch {
+        parsed = dataStr
+      }
+      onEvent(eventName || 'message', parsed)
+    }
+  }
 }
 
 async function readErrorMessage(res: Response): Promise<string> {
@@ -534,34 +607,6 @@ function PipelineResultSection({ result }: { result: PipelineResult }) {
   )
 }
 
-function BatchFileProgress({ stage, hasResult }: { stage: Stage; hasResult: boolean }) {
-  const activeStageIdx = STAGES.findIndex((s) => s.key === stage)
-  return (
-    <ul className="mt-2 space-y-2 border-t border-border pt-3">
-      {STAGES.map((s, i) => {
-        const isActive = s.key === stage
-        const isDone = hasResult || activeStageIdx > i
-        const { icon, colorClass } = progressIcon(s.key, isDone, isActive)
-        return (
-          <li key={s.key} className="flex items-center gap-2">
-            <span
-              className={`
-                flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-[10px] font-medium
-                ${colorClass}
-              `}
-            >
-              {isDone ? icon : isActive ? icon : i + 1}
-            </span>
-            <span className={`text-xs ${isActive ? 'font-medium text-foreground' : 'text-muted-foreground'}`}>
-              {s.label}
-            </span>
-          </li>
-        )
-      })}
-    </ul>
-  )
-}
-
 export default function HomePage() {
   const [legacyCode, setLegacyCode] = useState(SAMPLES[0].code)
   const [sourceLanguage, setSourceLanguage] = useState(SAMPLES[0].language)
@@ -576,23 +621,20 @@ export default function HomePage() {
   const [batchQueue, setBatchQueue] = useState<BatchQueueItem[]>([])
   const [batchRows, setBatchRows] = useState<BatchRow[]>([])
   const [isBatchRunning, setIsBatchRunning] = useState(false)
+  const [dropHover, setDropHover] = useState(false)
+  const dropDepth = useRef(0)
 
   const handleSampleSelect = useCallback((idx: number) => {
     setLegacyCode(SAMPLES[idx].code)
     setSourceLanguage(SAMPLES[idx].language)
   }, [])
 
-  async function handlePbFilesChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = e.target.files
-    if (!files?.length) return
-    const picked = Array.from(files).slice(0, 10)
+  async function ingestPbFiles(fileList: File[]) {
+    const picked = fileList.slice(0, 10)
     const allowed = picked.filter(
       (f) => f.name.toLowerCase().endsWith('.pb') || f.name.toLowerCase().endsWith('.pbl'),
     )
-    if (allowed.length === 0) {
-      e.target.value = ''
-      return
-    }
+    if (allowed.length === 0) return
     if (allowed.length === 1) {
       const code = await allowed[0].text()
       setLegacyCode(code)
@@ -604,7 +646,136 @@ export default function HomePage() {
       )
       setBatchQueue(items)
     }
+  }
+
+  async function handlePbFilesChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = e.target.files
+    if (!files?.length) return
+    await ingestPbFiles(Array.from(files))
     e.target.value = ''
+  }
+
+  function onDropZoneDragEnter(e: React.DragEvent) {
+    e.preventDefault()
+    e.stopPropagation()
+    dropDepth.current += 1
+    setDropHover(true)
+  }
+
+  function onDropZoneDragLeave(e: React.DragEvent) {
+    e.preventDefault()
+    e.stopPropagation()
+    dropDepth.current -= 1
+    if (dropDepth.current <= 0) {
+      dropDepth.current = 0
+      setDropHover(false)
+    }
+  }
+
+  function onDropZoneDragOver(e: React.DragEvent) {
+    e.preventDefault()
+    e.stopPropagation()
+  }
+
+  function onDropZoneDrop(e: React.DragEvent) {
+    e.preventDefault()
+    e.stopPropagation()
+    dropDepth.current = 0
+    setDropHover(false)
+    const fl = e.dataTransfer.files
+    if (fl?.length) void ingestPbFiles(Array.from(fl))
+  }
+
+  async function runBatchFileStream(runId: string, fileIndex: number) {
+    const res = await fetch(batchStreamUrl(runId, fileIndex), {
+      headers: { Accept: 'text/event-stream' },
+    })
+    if (!res.ok) {
+      const msg = await readErrorMessage(res)
+      setBatchRows((prev) =>
+        prev.map((r, i) =>
+          i === fileIndex ? { ...r, stage: 'error', error: msg, progressPercent: 0 } : r,
+        ),
+      )
+      return
+    }
+    const reader = res.body?.getReader()
+    if (!reader) {
+      setBatchRows((prev) =>
+        prev.map((r, i) =>
+          i === fileIndex ? { ...r, stage: 'error', error: 'No response body', progressPercent: 0 } : r,
+        ),
+      )
+      return
+    }
+    let sawComplete = false
+    await readSseStream(reader, (eventName, data) => {
+      const rec = data && typeof data === 'object' ? (data as Record<string, unknown>) : {}
+      if (eventName === 'status') {
+        const st = rec.stage
+        if (
+          st === 'analyzing' ||
+          st === 'translating' ||
+          st === 'evaluating' ||
+          st === 'testing'
+        ) {
+          const stage = st as Stage
+          const pct =
+            typeof rec.progress === 'number' ? Math.round(rec.progress) : stageToFallbackProgress(stage)
+          setBatchRows((prev) =>
+            prev.map((r, i) => (i === fileIndex ? { ...r, stage, progressPercent: pct } : r)),
+          )
+        }
+      } else if (eventName === 'complete') {
+        sawComplete = true
+        const payload = rec.data
+        if (payload && typeof payload === 'object') {
+          try {
+            const parsed = parseModernizePayload(payload as Record<string, unknown>)
+            setBatchRows((prev) =>
+              prev.map((r, i) =>
+                i === fileIndex
+                  ? {
+                      ...r,
+                      stage: 'done',
+                      progressPercent: 100,
+                      result: parsed,
+                      error: undefined,
+                      originalCode:
+                        typeof (payload as { original_code?: string }).original_code === 'string'
+                          ? (payload as { original_code: string }).original_code
+                          : r.originalCode,
+                    }
+                  : r,
+              ),
+            )
+          } catch (e) {
+            const detail = e instanceof Error ? e.message : 'Invalid response'
+            setBatchRows((prev) =>
+              prev.map((r, i) =>
+                i === fileIndex ? { ...r, stage: 'error', error: detail, result: null } : r,
+              ),
+            )
+          }
+        }
+      } else if (eventName === 'error') {
+        const msg = typeof rec.message === 'string' ? rec.message : 'Stream error'
+        setBatchRows((prev) =>
+          prev.map((r, i) =>
+            i === fileIndex ? { ...r, stage: 'error', error: msg, progressPercent: 0 } : r,
+          ),
+        )
+      }
+    })
+    if (!sawComplete) {
+      setBatchRows((prev) =>
+        prev.map((r, i) =>
+          i === fileIndex && r.stage !== 'error' && r.stage !== 'done'
+            ? { ...r, stage: 'error', error: 'Stream ended before completion', progressPercent: r.progressPercent }
+            : r,
+        ),
+      )
+    }
   }
 
   async function handleBatchRun() {
@@ -616,33 +787,14 @@ export default function HomePage() {
       id: `batch-${Date.now()}-${i}`,
       filename: q.filename,
       stage: 'analyzing',
+      progressPercent: 0,
       result: null,
       originalCode: q.code,
     }))
     setBatchRows(rows)
 
-    const timers: ReturnType<typeof setTimeout>[] = []
-    batchQueue.forEach((_, i) => {
-      const skew = i * 400
-      timers.push(
-        setTimeout(() => {
-          setBatchRows((prev) => prev.map((r, j) => (j === i ? { ...r, stage: 'translating' } : r)))
-        }, 1200 + skew),
-      )
-      timers.push(
-        setTimeout(() => {
-          setBatchRows((prev) => prev.map((r, j) => (j === i ? { ...r, stage: 'evaluating' } : r)))
-        }, 2400 + skew),
-      )
-      timers.push(
-        setTimeout(() => {
-          setBatchRows((prev) => prev.map((r, j) => (j === i ? { ...r, stage: 'testing' } : r)))
-        }, 3600 + skew),
-      )
-    })
-
     try {
-      const res = await fetch(migrateBatchUrl(), {
+      const startRes = await fetch(migrateBatchStartUrl(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -654,40 +806,18 @@ export default function HomePage() {
         }),
       })
 
-      timers.forEach(clearTimeout)
-
-      if (!res.ok) {
-        throw new Error(await readErrorMessage(res))
+      if (!startRes.ok) {
+        throw new Error(await readErrorMessage(startRes))
       }
 
-      const data = (await res.json()) as { results?: Record<string, unknown>[] }
-      const results = data.results ?? []
-      setBatchRows((prev) =>
-        prev.map((row, i) => {
-          const r = results[i]
-          if (!r) {
-            return { ...row, stage: 'error', error: 'Missing server entry for this file.', result: null }
-          }
-          if (typeof r.error === 'string') {
-            return { ...row, stage: 'error', error: r.error, result: null }
-          }
-          try {
-            const parsed = parseModernizePayload(r)
-            return {
-              ...row,
-              stage: 'done',
-              error: undefined,
-              result: parsed,
-              originalCode: typeof r.original_code === 'string' ? r.original_code : row.originalCode,
-            }
-          } catch (e) {
-            const detail = e instanceof Error ? e.message : 'Invalid response'
-            return { ...row, stage: 'error', error: detail, result: null }
-          }
-        }),
-      )
+      const startJson = (await startRes.json()) as { run_id?: string }
+      const runId = startJson.run_id
+      if (!runId) {
+        throw new Error('Batch start did not return run_id')
+      }
+
+      await Promise.all(rows.map((_, fileIndex) => runBatchFileStream(runId, fileIndex)))
     } catch (err) {
-      timers.forEach(clearTimeout)
       let msg = 'Unknown error'
       if (err instanceof TypeError && /fetch|network/i.test(err.message)) {
         msg = 'Could not reach the server. Make sure the backend (uvicorn) is running on port 8000.'
@@ -696,7 +826,11 @@ export default function HomePage() {
       }
       setError(msg)
       setBatchRows((prev) =>
-        prev.map((r) => ({ ...r, stage: 'error' as Stage, error: msg, result: null })),
+        prev.map((r) =>
+          r.stage === 'done'
+            ? r
+            : { ...r, stage: 'error' as Stage, error: msg, result: null, progressPercent: 0 },
+        ),
       )
     } finally {
       setIsBatchRunning(false)
@@ -849,20 +983,40 @@ export default function HomePage() {
                 ) : null}
               </div>
             </div>
-            <div className="overflow-hidden rounded-lg border border-border bg-card">
-              <div className="border-b border-border px-3 py-2">
-                <span className="font-mono text-xs text-muted-foreground">{sourceLanguage}</span>
+            <div
+              onDragEnter={onDropZoneDragEnter}
+              onDragLeave={onDropZoneDragLeave}
+              onDragOver={onDropZoneDragOver}
+              onDrop={onDropZoneDrop}
+              className={`
+                rounded-xl transition-colors
+                ${
+                  dropHover
+                    ? 'border-2 border-dashed border-foreground bg-muted/40 p-1'
+                    : 'border-2 border-dashed border-border p-1'
+                }
+              `}
+            >
+              <p
+                className={`px-1 pb-2 text-center text-xs ${dropHover ? 'text-foreground' : 'text-muted-foreground'}`}
+              >
+                {dropHover ? 'Drop .pb / .pbl files here' : 'Drag .pb or .pbl files here, or use Upload'}
+              </p>
+              <div className="overflow-hidden rounded-lg border border-border bg-card">
+                <div className="border-b border-border px-3 py-2">
+                  <span className="font-mono text-xs text-muted-foreground">{sourceLanguage}</span>
+                </div>
+                <textarea
+                  id="legacy-code-input"
+                  value={legacyCode}
+                  onChange={(e) => setLegacyCode(e.target.value)}
+                  rows={16}
+                  disabled={isBlocked}
+                  className="code-editor code-surface w-full border-0 p-4 outline-none ring-0 disabled:opacity-60"
+                  placeholder="Paste legacy code here."
+                  spellCheck={false}
+                />
               </div>
-              <textarea
-                id="legacy-code-input"
-                value={legacyCode}
-                onChange={(e) => setLegacyCode(e.target.value)}
-                rows={16}
-                disabled={isBlocked}
-                className="code-editor code-surface w-full border-0 p-4 outline-none ring-0 disabled:opacity-60"
-                placeholder="Paste legacy code here."
-                spellCheck={false}
-              />
             </div>
 
             <div className="flex flex-wrap items-end gap-4">
@@ -970,6 +1124,7 @@ export default function HomePage() {
               {batchRows.map((row) => {
                 const fileDone = row.stage === 'done' && row.result?.analysis
                 const fileErr = row.stage === 'error' || !!row.error
+                const barPct = fileErr ? 0 : fileDone ? 100 : row.progressPercent
                 return (
                   <details key={row.id} className="group rounded-lg border border-border bg-card open:shadow-sm">
                     <summary className="cursor-pointer list-none px-4 py-3 marker:hidden [&::-webkit-details-marker]:hidden">
@@ -979,7 +1134,13 @@ export default function HomePage() {
                           {fileErr ? 'Error' : fileDone ? 'Done' : isBatchRunning ? 'Working…' : row.stage}
                         </span>
                       </div>
-                      <BatchFileProgress stage={row.stage} hasResult={!!fileDone} />
+                      <p className="mt-2 font-mono text-[11px] text-muted-foreground">{formatBatchRowStatus(row)}</p>
+                      <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                        <div
+                          className="h-full rounded-full bg-foreground transition-[width] duration-300 ease-out"
+                          style={{ width: `${barPct}%` }}
+                        />
+                      </div>
                     </summary>
                     <div className="border-t border-border px-4 pb-4 pt-1">
                       {row.error ? (
