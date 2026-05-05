@@ -1,6 +1,7 @@
 'use client'
 
 import { FormEvent, useCallback, useRef, useState } from 'react'
+import * as Diff from 'diff'
 
 type Stage = 'idle' | 'analyzing' | 'translating' | 'evaluating' | 'testing' | 'done' | 'error'
 
@@ -36,7 +37,7 @@ type PipelineResult = {
   tests: TestResult | null
 }
 
-type ActiveTab = 'analysis' | 'translation' | 'evaluation' | 'tests'
+type ActiveTab = 'analysis' | 'translation' | 'diff' | 'evaluation' | 'tests'
 
 type BatchQueueItem = { filename: string; code: string }
 
@@ -457,7 +458,106 @@ function CodeBlock({ code, language = '' }: { code: string; language?: string })
   )
 }
 
-function PipelineResultSection({ result }: { result: PipelineResult }) {
+function DiffView({ oldCode, newCode }: { oldCode: string; newCode: string }) {
+  const diffResult = Diff.diffLines(oldCode, newCode)
+  const rows: { left: { text: string; type: string }; right: { text: string; type: string } }[] = []
+
+  let i = 0
+  while (i < diffResult.length) {
+    const part = diffResult[i]
+    const nextPart = diffResult[i + 1]
+
+    if (part.removed && nextPart?.added) {
+      const leftLines = part.value.split('\n')
+      if (leftLines[leftLines.length - 1] === '') leftLines.pop()
+      const rightLines = nextPart.value.split('\n')
+      if (rightLines[rightLines.length - 1] === '') rightLines.pop()
+
+      const maxLen = Math.max(leftLines.length, rightLines.length)
+      for (let j = 0; j < maxLen; j++) {
+        rows.push({
+          left: j < leftLines.length ? { text: leftLines[j], type: 'removed' } : { text: '', type: 'empty' },
+          right: j < rightLines.length ? { text: rightLines[j], type: 'added' } : { text: '', type: 'empty' },
+        })
+      }
+      i += 2
+    } else if (part.removed) {
+      const lines = part.value.split('\n')
+      if (lines[lines.length - 1] === '') lines.pop()
+      lines.forEach((l) => rows.push({ left: { text: l, type: 'removed' }, right: { text: '', type: 'empty' } }))
+      i++
+    } else if (part.added) {
+      const lines = part.value.split('\n')
+      if (lines[lines.length - 1] === '') lines.pop()
+      lines.forEach((l) => rows.push({ left: { text: '', type: 'empty' }, right: { text: l, type: 'added' } }))
+      i++
+    } else {
+      const lines = part.value.split('\n')
+      if (lines[lines.length - 1] === '') lines.pop()
+      lines.forEach((l) => rows.push({ left: { text: l, type: 'normal' }, right: { text: l, type: 'normal' } }))
+      i++
+    }
+  }
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-border bg-card">
+      <div className="grid grid-cols-2 border-b border-border bg-muted/30 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <div className="px-4 py-2.5 border-r border-border">Original PowerBuilder</div>
+        <div className="px-4 py-2.5">Translated C#</div>
+      </div>
+      <div className="code-editor max-h-[650px] overflow-auto p-0 font-mono text-[12px] leading-relaxed">
+        <table className="w-full border-collapse table-fixed">
+          <tbody>
+            {rows.map((row, idx) => (
+              <tr key={idx} className="group border-b border-border/5 last:border-0">
+                <td
+                  className={`
+                    w-1/2 border-r border-border/40 px-4 py-0.5 align-top break-all whitespace-pre-wrap
+                    ${
+                      row.left.type === 'removed'
+                        ? 'bg-red-500/10 text-red-700 dark:text-red-400'
+                        : row.left.type === 'empty'
+                        ? 'bg-muted/5'
+                        : 'text-muted-foreground/60'
+                    }
+                  `}
+                >
+                  <div className="flex gap-2">
+                    <span className="w-3 shrink-0 select-none opacity-30">
+                      {row.left.type === 'removed' ? '-' : ''}
+                    </span>
+                    <span>{row.left.text}</span>
+                  </div>
+                </td>
+                <td
+                  className={`
+                    w-1/2 px-4 py-0.5 align-top break-all whitespace-pre-wrap
+                    ${
+                      row.right.type === 'added'
+                        ? 'bg-green-500/10 text-green-700 dark:text-green-400'
+                        : row.right.type === 'empty'
+                        ? 'bg-muted/5'
+                        : 'text-foreground'
+                    }
+                  `}
+                >
+                  <div className="flex gap-2">
+                    <span className="w-3 shrink-0 select-none opacity-30">
+                      {row.right.type === 'added' ? '+' : ''}
+                    </span>
+                    <span>{row.right.text}</span>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function PipelineResultSection({ result, originalCode }: { result: PipelineResult, originalCode: string }) {
   const [activeTab, setActiveTab] = useState<ActiveTab>('analysis')
 
   if (!result.analysis) {
@@ -471,6 +571,7 @@ function PipelineResultSection({ result }: { result: PipelineResult }) {
           [
             { key: 'analysis' as const, label: 'Analysis' },
             { key: 'translation' as const, label: 'C#' },
+            { key: 'diff' as const, label: 'Diff' },
             { key: 'evaluation' as const, label: 'Review' },
             { key: 'tests' as const, label: 'Tests' },
           ] as const
@@ -524,6 +625,12 @@ function PipelineResultSection({ result }: { result: PipelineResult }) {
               </p>
             </div>
           ) : null}
+        </div>
+      )}
+
+      {activeTab === 'diff' && result.translation && (
+        <div className="space-y-4">
+          <DiffView oldCode={originalCode} newCode={result.translation.translated_code} />
         </div>
       )}
 
@@ -1118,7 +1225,7 @@ export default function HomePage() {
           </div>
         </div>
 
-        {hasResult && <PipelineResultSection result={result} />}
+        {hasResult && <PipelineResultSection result={result} originalCode={legacyCode} />}
 
         {batchRows.length > 0 && (
           <section className="space-y-3">
@@ -1154,7 +1261,7 @@ export default function HomePage() {
                           {row.error}
                         </div>
                       ) : null}
-                      {row.result?.analysis ? <PipelineResultSection result={row.result} /> : null}
+                      {row.result?.analysis ? <PipelineResultSection result={row.result} originalCode={row.originalCode} /> : null}
                     </div>
                   </details>
                 )
